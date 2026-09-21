@@ -1,0 +1,42 @@
+{
+ "claims": {
+  "i-007c27133b858ab27": {
+   "az": "us-east-2a",
+   "signing_key": "VLEK",
+   "chip_zero": true,
+   "mask_flag": false,
+   "instance": "1c189d4b8f20b2d4bd158748a4b630c776081377f78178337d6196d20e18ccec",
+   "place": null
+  },
+  "i-082814cff1ada5de5": {
+   "az": "eu-west-1a",
+   "signing_key": "VLEK",
+   "chip_zero": true,
+   "mask_flag": false,
+   "instance": "a5ce760fc35f13273ad8b90612ca4a754d05b836bdd67b0d382e1a76a9e0c00a",
+   "place": null
+  }
+ },
+ "both_masked": true,
+ "instances_differ": true,
+ "enrolled": false,
+ "impostor_refused": true,
+ "owner_accepted": false,
+ "log": [
+  [
+   "enroll-rejected",
+   "3059301306072a86",
+   "evidence invalid"
+  ],
+  [
+   "declined-evidence",
+   "3059301306072a86",
+   "0"
+  ],
+  [
+   "declined-evidence",
+   "3059301306072a86",
+   "0"
+  ]
+ ]
+}

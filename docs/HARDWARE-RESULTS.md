@@ -9,6 +9,55 @@
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
 
+# Run of 21 September 2026, 20:47 UTC — AWS: the instance anchor where the silicon anchor is gone
+
+`examples/aws_anchor_run.py`, two AWS EC2 SEV-SNP instances in **us-east-2** and **eu-west-1**,
+both terminated after the run. Evidence: `evidence/aws-anchor-20260921T204747Z/`.
+
+The archive said `CHIP_ID` is zeroed on AWS shared tenancy, that the VLEK signing key is shared
+region-wide, and that `REPORT_ID` is distinct anyway. That was an argument from stored bytes. This
+is machines launched now.
+
+```
+us-east-2a  VLEK   CHIP_ID all zero: True   MASK_CHIP_KEY flag: False
+            instance (REPORT_ID) 05496ec336fcdb23   place ABSENT
+eu-west-1a  VLEK   CHIP_ID all zero: True   MASK_CHIP_KEY flag: False
+            instance (REPORT_ID) 4bd0091ce0c0b237   place ABSENT
+
+enrol   us-east-2a                        : True (enrolled)
+present eu-west-1a, same key, other instance : False
+   -> rejected: key presented from an instance it was not enrolled on
+present us-east-2a, the enrolled one      : True (accepted; continuity intact)
+```
+
+The refusal is by the anchor, not by unverifiable evidence: the mandate log shows
+`rejected-impostor` naming the enrolled instance and the presented one.
+
+## Two things this run found that the archive could not
+
+**The verifier could not appraise AWS at all.** It refused VLEK-signed reports outright, with a
+correct reason -- AMD does not publish that leaf by `CHIP_ID` -- and the consequence was that a
+platform whose anchor works perfectly was simply unusable. The leaf lives in the host certificate
+table the guest reads with `SNP_GET_EXT_REPORT`; evidence now carries it, and the chain validates
+through AMD's **vlek** chain rather than the vcek one. Table entry `a8074bc2`, leaf 1319 bytes.
+
+**`SNP_GET_EXT_REPORT` fails with a bare EINVAL** unless `certs_len` is page-aligned and no larger
+than the kernel's `SEV_FW_BLOB_MAX_SIZE` of 16384. Measured on Amazon Linux 2023, kernel
+6.1.186-228.376. Nothing in the error says so.
+
+## What this run does and does not show
+
+It shows the instance anchor doing its job on live shared-tenancy hardware where the silicon claim
+is absent and the signing key is shared: two machines told apart, one enrolled, the other refused
+on its first message, the owner still served.
+
+It does not show the TLS binding. AWS SEV-SNP guests here have no inbound network -- no security
+group, no key pair -- so they report through the serial console, and **the exporter and session
+context are supplied to the guest rather than derived from a live handshake**. The relay defence
+is what the GCP runs prove.
+
+---
+
 # Run of 21 September 2026, 20:02 UTC — two mandates reconciled through the attester
 
 `examples/federation_hw.py`, one SEV-SNP guest in `europe-west4-b`, instance `966b8530389a69d1`,
