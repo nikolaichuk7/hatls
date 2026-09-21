@@ -26,8 +26,12 @@ signed Evidence; `verify_report(evidence, expected_report_data) -> (ok, anchor)`
 `anchor` is None when the platform exposes no usable instance identifier.
 """
 import hashlib, hmac, time
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from .store import MemoryStore
 from .transfer import canonical, verify_grant, GRANT_VERSION
+from .log import MerkleLog
+from . import receipt as _receipt
 
 # ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
@@ -45,8 +49,21 @@ def intra_link(transcript_hash, tik_pub):
 def post_link(exporter, prev_link, counter):
     return _hkdf_expand_label(exporter, b"continuity", prev_link + counter.to_bytes(8,"big"), 32)
 
-def report_data_for(link):
-    return hashlib.sha512(b"HATLS-continuity-v0" + link).digest()   # 64 bytes for REPORT_DATA
+def report_data_for(link, head=None):
+    """What the TEE signs over.
+
+    Without a head this is the v0 binder: the hardware commits to the continuity link and nothing
+    else. With one, the hardware ALSO commits to the mandate's claimed ledger state at that moment.
+
+    That second form is the only leverage a relying party has against the authority itself. A log
+    makes a mandate's decisions non-repudiable, but the head is still the mandate's own word: it
+    can sign two histories and each looks fine alone. Here the head is carried into a report signed
+    by a chip the mandate does not own, so an auditor holding that report can say "at this moment
+    this mandate claimed this ledger state" and the mandate cannot produce a different one for that
+    moment. The party being audited cannot forge the witness."""
+    if head is None:
+        return hashlib.sha512(b"HATLS-continuity-v0" + link).digest()
+    return hashlib.sha512(b"HATLS-continuity-v1" + link + head).digest()
 
 # ---------- enrolment credential: a real CSR, self-signed (proof of possession) -------
 def make_enrolment_csr(tik_private_key, subject_cn="hatls-identity"):
@@ -77,13 +94,16 @@ class Attester:
         self.tee = tee; self.tik_pub = tik_pub
         self.prev = None; self.counter = 0
 
-    def attest(self, transcript_hash, exporter):
+    def attest(self, transcript_hash, exporter, head=None):
+        """`head` is the relying party's current ledger head, if it sent one. Binding it makes the
+        hardware a witness to what the mandate claimed its log was at this moment."""
         il = intra_link(transcript_hash, self.tik_pub)
         base = self.prev if self.prev is not None else il
         pl = post_link(exporter, base, self.counter)
-        evidence = self.tee.report(report_data_for(pl))     # HARDWARE binds the link
+        evidence = self.tee.report(report_data_for(pl, head))   # HARDWARE binds link (+ head)
         msg = {"counter": self.counter, "intra_ok_base": self.prev is None,
                "post_link": pl.hex(), "evidence": evidence}
+        if head is not None: msg["head"] = head.hex()
         self.prev = pl; self.counter += 1
         return msg
 
@@ -113,8 +133,16 @@ class Mandate:
     The mandate itself is trusted, and is not part of the threat model in docs/THREAT-MODEL.md.
     """
     def __init__(self, verify_report, require_anchor=True, require_enrolment=False,
-                 require_place=False, store=None, challenge_ttl=300, witness_ttl=3600):
+                 require_place=False, store=None, challenge_ttl=300, witness_ttl=3600,
+                 signing_key=None):
         self.verify_report = verify_report
+        # the key the mandate signs its own tree heads with. An ephemeral one makes receipts
+        # unverifiable after a restart, so a durable deployment must supply a real one.
+        self._signing_key = signing_key or ec.generate_private_key(ec.SECP256R1())
+        self.ephemeral_signing_key = signing_key is None
+        self.merkle = MerkleLog()
+        self.last_receipt = None
+        self._roots = {self.merkle.head().hex(): 0}   # every head this log has genuinely had
         self.require_anchor = require_anchor
         self.require_enrolment = require_enrolment
         self.require_place = require_place
@@ -183,6 +211,44 @@ class Mandate:
 
     def _emit(self, ev): self.log.append(ev)
 
+    # ---- the transparency side: every decision is a leaf, every leaf gets a receipt ----
+    @property
+    def public_key(self):
+        """SPKI DER. A verifier needs this and nothing else to check a receipt."""
+        return self._signing_key.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    def head_for_attestation(self):
+        """The head to hand an attester, so its chip witnesses the ledger state we are claiming."""
+        return self.merkle.head()
+
+    def knows_head(self, head: bytes):
+        """True if this log genuinely had that head. A mandate that cannot account for a head its
+        own attester witnessed has been caught holding a second history."""
+        return head.hex() in self._roots
+
+    def sth(self):
+        """The mandate's signed word about its whole log, right now."""
+        return _receipt.sign_sth(self._signing_key, len(self.merkle), self.merkle.head())
+
+    def prove_extension(self, old_size):
+        """A consistency proof that the log today extends the log at `old_size`."""
+        return [p.hex() for p in self.merkle.prove_consistency(old_size)]
+
+    def receipt(self, index):
+        return {"entry": self.merkle.entries[index].hex(),
+                "index": index,
+                "proof": [p.hex() for p in self.merkle.prove_inclusion(index)],
+                "sth": self.sth()}
+
+    def _record(self, kind, tik_pub, accepted, reason, instance=None):
+        entry = _receipt.make_entry(kind, tik_pub, accepted, reason, instance,
+                                    seq=len(self.merkle))
+        index, new_root = self.merkle.append(entry)
+        self._roots[new_root.hex()] = len(self.merkle)
+        self.last_receipt = self.receipt(index)
+        return self.last_receipt
+
     def _dispute(self, rec, reason):
         """Record a dispute WITH a timestamp: 'within what bound' is not answerable without one.
 
@@ -199,7 +265,7 @@ class Mandate:
         self._challenges[n] = now + self.challenge_ttl
         return n
 
-    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
+    def _enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
         """One-time: bind an identity key to the instance it was born on.
 
         Requires (a) a nonce this mandate issued, unspent and unexpired, (b) a CSR that carries
@@ -252,12 +318,20 @@ class Mandate:
                     "transferable" if transfer_authority is not None else "fixed"))
         return True, "enrolled"
 
+    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
+        """Bind an identity to its instance, and record the decision. See `_enroll`."""
+        ok, why = self._enroll(tik_pub, enroll_evidence, nonce, csr_der, transfer_authority)
+        inst = self._rec(tik_pub.hex())["enrolled_instance"] if ok else None
+        self._record("enroll", tik_pub, ok, why, bytes.fromhex(inst) if inst else None)
+        return ok, why
+
     def revoke(self, tik_pub, reason="operator"):
         """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
         k = tik_pub.hex()
         rec = self._rec(k); rec["revoked"] = True; rec["reason"] = reason
         self._save(k, rec)
         self._emit(("revoked", k[:16], reason))
+        self._record("revoke", tik_pub, True, reason)
         return True, f"identity revoked: {reason}"
 
     def accept_transfer(self, tik_pub, grant, signature):
@@ -283,6 +357,7 @@ class Mandate:
         rec = self._rec(k)
         def no(reason, tag):
             self._emit(("transfer-rejected", k[:16], tag))
+            self._record("transfer", tik_pub, False, reason)
             return False, reason
         if rec["revoked"]:
             return no("identity revoked", "revoked")
@@ -347,9 +422,11 @@ class Mandate:
         if any_origin:
             self._emit(("transfer-any-origin", k[:16], (previous or "")[:12], to_hex[:12]))
         self._emit(("transferred", k[:16], (previous or "")[:12], to_hex[:12]))
+        self._record("transfer", tik_pub, True, "transferred to the authorised instance",
+                     to_instance)
         return True, "transferred to the authorised instance"
 
-    def present(self, tik_pub, session_context, exporter, msg):
+    def _appraise(self, tik_pub, session_context, exporter, msg, head=None):
         """Appraise one attestation step.
 
         `session_context` and `exporter` MUST both be derived by the Relying Party from ITS OWN
@@ -365,16 +442,20 @@ class Mandate:
         k = tik_pub.hex()
         skey = hashlib.sha256(session_context).hexdigest()[:32]
         rec = self._rec(k)
+        instance = None
         if rec["revoked"]:
             self._emit(("declined-revoked", k[:16], msg["counter"]))
-            return False, "identity revoked"
+            return False, "identity revoked", instance
 
         # 1) the hardware Evidence must be valid AND bind exactly this post_link
         pl = bytes.fromhex(msg["post_link"])
-        ok, anchor = self.verify_report(msg["evidence"], report_data_for(pl))
+        if head is not None and not self.knows_head(head):
+            self._emit(("declined-unknown-head", k[:16], head.hex()[:12]))
+            return False, "the ledger head offered for this attestation is not one this log had", instance
+        ok, anchor = self.verify_report(msg["evidence"], report_data_for(pl, head))
         if not ok:
             self._emit(("declined-evidence", k[:16], msg["counter"]))
-            return False, "evidence invalid or does not bind the link"
+            return False, "evidence invalid or does not bind the link", instance
 
         # 1a) FAIL CLOSED on a platform that cannot name its own instance. An all-zero anchor is
         #     not an identity: on such a platform every machine looks alike, so accepting it would
@@ -383,7 +464,7 @@ class Mandate:
             if self.require_anchor:
                 self._emit(("declined-no-anchor", k[:16], msg["counter"]))
                 return False, ("platform exposes no usable instance claim: re-hosting is "
-                               "undecidable here (set require_anchor=False to accept that)")
+                               "undecidable here (set require_anchor=False to accept that)"), instance
             self._emit(("anchor-absent-downgraded", k[:16], msg["counter"]))
 
         enrolled_instance = (bytes.fromhex(rec["enrolled_instance"])
@@ -397,7 +478,7 @@ class Mandate:
         if enrolled_instance is None and self.require_enrolment:
             self._emit(("declined-not-enrolled", k[:16], msg["counter"]))
             return False, ("identity has no enrolment on record and this mandate requires one "
-                           "(a lost ledger must not silently downgrade the guarantee)")
+                           "(a lost ledger must not silently downgrade the guarantee)"), instance
 
         # 1c) ENROLMENT GATE. Evidence from any instance other than the enrolled one is an
         #     impostor, rejected on its FIRST message. We know which instance is legitimate, so we
@@ -410,20 +491,20 @@ class Mandate:
             self._save(k, rec)
             self._emit(("rejected-impostor", k[:16], enrolled_instance.hex()[:12],
                         instance.hex()[:12], msg["counter"]))
-            return False, "rejected: key presented from an instance it was not enrolled on"
+            return False, "rejected: key presented from an instance it was not enrolled on", instance
 
         # 1d) a deployment may additionally pin the silicon. This is a separate, weaker claim than
         #     identity: two guests on one socket share a place, and a shared-tenancy platform has
         #     none at all.
         if self.require_place and place is None:
             self._emit(("declined-no-place", k[:16], msg["counter"]))
-            return False, "platform exposes no place claim and this mandate requires one"
+            return False, "platform exposes no place claim and this mandate requires one", instance
         enrolled_place = bytes.fromhex(rec["enrolled_place"]) if rec["enrolled_place"] else None
         if self.require_place and enrolled_place is not None and place != enrolled_place:
             self._dispute(rec, "instance moved to different silicon")
             self._save(k, rec)
             self._emit(("declined-place-changed", k[:16], msg["counter"]))
-            return False, "the enrolled instance is reporting from different silicon"
+            return False, "the enrolled instance is reporting from different silicon", instance
 
         # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent and
         #    record a dispute. We do NOT destroy the identity on an unauthenticated claim.
@@ -436,7 +517,7 @@ class Mandate:
             self._emit(("contention-anchor", k[:16], observed.hex()[:12],
                         instance.hex()[:12], msg["counter"]))
             return False, ("continuity contention: a second instance claims this identity "
-                           "(no enrolment on record, so the mandate refuses to pick a winner)")
+                           "(no enrolment on record, so the mandate refuses to pick a winner)"), instance
 
         # 3) the chain of THIS connection. A session we have not seen must start at counter 0; one
         #    we have seen must advance by exactly one.
@@ -444,20 +525,20 @@ class Mandate:
         if sess is None:
             if msg["counter"] != 0:
                 self._emit(("declined-counter", k[:16], "new session", msg["counter"]))
-                return False, "a session's first link must be counter 0"
+                return False, "a session's first link must be counter 0", instance
             base = intra_link(session_context, tik_pub)
         else:
             if msg["counter"] != sess["counter"] + 1:
                 self._dispute(rec, "counter did not advance"); self._save(k, rec)
                 self._emit(("declined-counter", k[:16], sess["counter"], msg["counter"]))
-                return False, "counter did not advance by one (replay or reorder)"
+                return False, "counter did not advance by one (replay or reorder)", instance
             base = sess["prev"]
 
         # 4) recompute the link ourselves from values we derived, not values we were handed
         if post_link(exporter, base, msg["counter"]) != pl:
             self._dispute(rec, "link does not chain"); self._save(k, rec)
             self._emit(("declined-linkmismatch", k[:16], msg["counter"]))
-            return False, "link does not chain (relay, replay or a foreign session)"
+            return False, "link does not chain (relay, replay or a foreign session)", instance
 
         self.sessions[(k, skey)] = {"prev": pl, "counter": msg["counter"]}
         if instance is not None:
@@ -466,4 +547,15 @@ class Mandate:
             self._save(k, rec)
         self._emit(("accept", k[:16], skey[:8], msg["counter"],
                     instance.hex()[:12] if instance else "no-instance"))
-        return True, "accepted; continuity intact"
+        return True, "accepted; continuity intact", instance
+
+    def present(self, tik_pub, session_context, exporter, msg, head=None):
+        """Appraise one step and record the decision in the log. Returns (accepted, reason);
+        the receipt for this decision is `self.last_receipt`.
+
+        `head` is the ledger head this relying party gave the attester before it signed. When one
+        is used, the hardware report commits to it, and the report becomes evidence of what this
+        mandate claimed its log was at that moment."""
+        ok, why, instance = self._appraise(tik_pub, session_context, exporter, msg, head)
+        self._record("present", tik_pub, ok, why, instance)
+        return ok, why
