@@ -221,7 +221,7 @@ succeeds on three distinct live chips; a single flipped `MEASUREMENT` byte is re
   authority at enrolment; only a single-use, time-bounded grant signed by it moves the identity.
   The mandate enforces rather than adjudicates. The new exposure is that authority key: lose it and
   the workload is stranded, steal it and the workload moves. No k-of-n, no authority recovery.
-- **Federation: divergence is now detectable, still not prevented.** One hardware report can carry
+- **Cross-mandate divergence is now detectable, still not prevented — and this is not a federation.** One hardware report can carry
   several mandates' ledger heads at once, so their claims meet inside evidence neither controls;
   a mandate whose later history does not extend what the chip witnessed is caught. Preventing two
   mandates from admitting different instances needs consensus and is not attempted.
