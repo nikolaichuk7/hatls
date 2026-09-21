@@ -127,7 +127,9 @@ def snp_anchor(f):
 def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark_sha256=None):
     """Verify a real 1184-byte report and appraise the platform it came from.
 
-      * signature over the report body by the leaf key AMD issued for this CHIP_ID and TCB;
+      * signature over the report body by the leaf key: the VCEK AMD issued for this CHIP_ID and
+        TCB, or, for a VLEK-signed report, the certificate the evidence carries in `leaf_pem`,
+        since AMD does not publish that one by CHIP_ID;
       * that leaf chains to the AMD root: VCEK -> ASK -> ARK, ARK self-signed (require_chain);
       * the guest POLICY does not permit DEBUG, which would let the host read the key (allow_debug);
       * the launch MEASUREMENT equals a pinned value, when one is given;
@@ -153,11 +155,24 @@ def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark
                 raise
         raise RuntimeError(f"KDS rate-limited after retries: {url}")
 
-    def leaf_cert(f):
-        """The VCEK AMD issued for this CHIP_ID at this TCB. Returns (parsed, der)."""
+    def leaf_cert(f, supplied_pem=None):
+        """The certificate that signed this report. Returns (parsed, der).
+
+        For a VCEK report AMD publishes the leaf by CHIP_ID and we fetch it. For a VLEK report it
+        does not -- the key is issued to the cloud provider, not to a chip -- so the leaf has to
+        come from the host certificate table the guest reads alongside the report. Refusing VLEK
+        outright, as this verifier first did, refuses AWS shared tenancy entirely: the anchor is
+        there and perfectly usable, but nothing can appraise the evidence carrying it."""
+        if f["signing_key"] == "VLEK":
+            if supplied_pem is None:
+                raise ValueError("VLEK-signed report and no leaf certificate supplied: AMD KDS "
+                                 "does not publish it by CHIP_ID, so the guest must pass the one "
+                                 "from its host certificate table")
+            der = x509.load_pem_x509_certificate(supplied_pem).public_bytes(
+                serialization.Encoding.DER)
+            return x509.load_der_x509_certificate(der), der
         if f["signing_key"] != "VCEK":
-            raise ValueError(f"{f['signing_key']}-signed report: AMD KDS does not publish this leaf "
-                             "by CHIP_ID; supply the cloud's certificate explicitly")
+            raise ValueError(f"{f['signing_key']}-signed report: unsupported signing key")
         t = f["tcb"]
         url = (f"https://kdsintf.amd.com/vcek/v1/{f['product']}/{f['chip_id'].hex()}"
                f"?blSPL={t[0]}&teeSPL={t[1]}&snpSPL={t[2]}&ucodeSPL={t[3]}")
@@ -165,7 +180,7 @@ def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark
         return x509.load_der_x509_certificate(der), der
 
     def chain_ok(leaf_der, f):
-        """Path validation VCEK -> ASK -> ARK with ARK as the only trust anchor.
+        """Path validation leaf -> intermediate -> ARK with ARK as the only trust anchor.
 
         Done through OpenSSL on purpose. AMD signs ASK and ARK with RSASSA-PSS and encodes
         trailerField=1 explicitly, which is the DEFAULT -- X.690 11.5 forbids that in DER, so
@@ -175,10 +190,11 @@ def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark
         """
         import re
         from OpenSSL import crypto as oc
-        pem = _get(f"https://kdsintf.amd.com/vcek/v1/{f['product']}/cert_chain",
-                   f"{f['product']}-chain.pem")
+        kind = "vlek" if f["signing_key"] == "VLEK" else "vcek"
+        pem = _get(f"https://kdsintf.amd.com/{kind}/v1/{f['product']}/cert_chain",
+                   f"{f['product']}-{kind}-chain.pem")
         blocks = re.findall(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", pem, re.S)
-        if len(blocks) < 2: return False, "AMD chain did not contain ASK and ARK"
+        if len(blocks) < 2: return False, "AMD chain did not contain the intermediate and ARK"
         certs = [oc.load_certificate(oc.FILETYPE_PEM, b) for b in blocks]
         ask, ark = certs[0], certs[-1]
         if ark_sha256 and hashlib.sha256(
@@ -204,7 +220,8 @@ def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark
         if measurement is not None and f["measurement"] != measurement:
             return False, None
         try:
-            cert, cert_der = leaf_cert(f)
+            supplied = ev.get("leaf_pem")
+            cert, cert_der = leaf_cert(f, supplied.encode() if supplied else None)
             r = int.from_bytes(b[_OFF["sig"]:_OFF["sig"]+48], "little")
             s = int.from_bytes(b[_OFF["sig"]+72:_OFF["sig"]+120], "little")
             cert.public_key().verify(utils.encode_dss_signature(r, s), b[:_OFF["sig"]],

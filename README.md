@@ -230,7 +230,11 @@ mandate accepts. This is an open item, stated rather than hidden.
   trust boundary of this identity**. In our corpus `REPORT_ID_MA` is all-ones on all 73 GCP
   reports, i.e. no migration agent — a measured fact about those deployments, not a guarantee.
   What the equivalent claim is on TDX and Nitro is still open.
-- Measured on one cloud and one silicon vendor so far. AWS, Azure, and Intel TDX are next.
+- **Measured on GCP and AWS, both AMD SEV-SNP.** GCP carries the full cycle including the TLS
+  binding; AWS proves the instance anchor on shared tenancy, where `CHIP_ID` is zeroed and the VLEK
+  signing key is shared region-wide, but not the TLS binding — those guests have no inbound network
+  and report through the serial console, so their exporter is supplied rather than derived from a
+  live handshake. Azure and Intel TDX are still untested.
 - The physical-insider case is narrowed, not eliminated — it cannot be, by the nature of any
   signing key. The beacon interval bounds detection resolution, not the attacker's window.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
