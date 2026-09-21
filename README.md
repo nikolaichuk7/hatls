@@ -60,12 +60,17 @@ front: see *no instance anchor* under [Honest limits](#honest-limits).
 
 ```bash
 git clone https://github.com/nikolaichuk7/hatls && cd hatls
-pip install -r requirements.txt
-PYTHONPATH=. python3 examples/run_local.py     # nine scenarios end to end on a mock chip
-PYTHONPATH=. python3 examples/attack.py        # try to break it: 8 attacks, see the verdicts
+pip install -r requirements.txt -r requirements-dev.txt
+PYTHONPATH=. python3 -m pytest tests/ -q       # the whole suite, no cloud and no hardware
+PYTHONPATH=. python3 examples/run_local.py     # eleven scenarios end to end on a mock chip
+PYTHONPATH=. python3 examples/attack.py        # try to break it: 13 attacks, see the verdicts
 PYTHONPATH=. python3 examples/relay_demo.py    # a real TLS relay, with the real stolen key
 PYTHONPATH=. python3 bench/benchmark.py        # reproduce every number in the table below
 ```
+
+Nothing above touches a network or a cloud account. `requirements.txt` is what the protocol needs;
+`requirements-dev.txt` adds pytest, and is separate so that using the library does not drag a test
+runner in with it.
 
 `attack.py` prints `STOPPED` for every attack the mandate catches and is honest about the weaker
 no-enrolment mode. Add your own attack to `examples/attack.py` and see if it gets through.
@@ -138,6 +143,9 @@ evidence/      real attestation verdicts from the hardware runs
 
 Numbers reproduce from `examples/` on a mock chip; the beacon cost is from `tools/liveness_probe.py`
 on a real AMD SEV-SNP chip.
+
+All of it runs from a clean checkout with no cloud account: **150 tests**, **13 of 13 attacks
+stopped**, a real TLS relay on localhost, and a benchmark that reproduces every number below.
 
 | Question a deployer asks | Measured answer |
 |---|---|
@@ -230,11 +238,17 @@ mandate accepts. This is an open item, stated rather than hidden.
   trust boundary of this identity**. In our corpus `REPORT_ID_MA` is all-ones on all 73 GCP
   reports, i.e. no migration agent — a measured fact about those deployments, not a guarantee.
   What the equivalent claim is on TDX and Nitro is still open.
-- **Measured on GCP and AWS, both AMD SEV-SNP.** GCP carries the full cycle including the TLS
-  binding; AWS proves the instance anchor on shared tenancy, where `CHIP_ID` is zeroed and the VLEK
-  signing key is shared region-wide, but not the TLS binding — those guests have no inbound network
-  and report through the serial console, so their exporter is supplied rather than derived from a
-  live handshake. Azure and Intel TDX are still untested.
+- **Measured on GCP and AWS, both AMD SEV-SNP; TDX measured and found wanting; Azure blocked.**
+  GCP carries the full cycle including the TLS binding. AWS proves the instance anchor on shared
+  tenancy, where `CHIP_ID` is zeroed and the VLEK signing key is shared region-wide — but not the
+  TLS binding, because those guests have no inbound network and report through the serial console,
+  so their exporter is supplied rather than derived from a live handshake.
+  On **Intel TDX** the anchor does not exist: two TDs from one image differ in exactly one
+  `TDREPORT` field, `MROWNER`, and the host VMM supplies that one. A design that anchors on
+  SEV-SNP does not port to TDX by renaming a field — see
+  [ietf/research](https://github.com/nikolaichuk7/hatls) notes and `evidence/tdx-claims-*`.
+  **Azure is untested**: confidential-VM quota is 0 in all nine regions checked, for both the
+  `DCADSv5` and `ECADSv5` families, so the VMs cannot be created without a quota grant.
 - The physical-insider case is narrowed, not eliminated — it cannot be, by the nature of any
   signing key. The beacon interval bounds detection resolution, not the attacker's window.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
