@@ -3,8 +3,17 @@
 
 Both expose the same contract:
     tee.report(report_data: bytes[64]) -> evidence (dict)
-    verify(evidence, expected_report_data) -> (ok: bool, chip_id: bytes|None)
+    verify(evidence, expected_report_data) -> (ok: bool, anchor: bytes|None)
+
+`anchor` is the platform's instance identifier. It is None when the platform does not expose a
+usable one -- notably an all-zero SEV-SNP CHIP_ID, which is what a shared-tenancy VLEK-signed
+report carries. Measured on our own archive: six distinct AWS instances all report zeros, so a
+zero anchor is NOT an identity and must never be compared as if it were. The report itself is
+still valid; only the instance question is unanswerable.
 """
+def _usable_anchor(chip):
+    """None for an absent/masked identifier, otherwise the identifier itself."""
+    return None if (chip is None or not any(chip)) else chip
 import hashlib, os, json, base64, subprocess
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
@@ -34,7 +43,7 @@ def mock_verifier(trusted_pubs):
         try:
             pub.verify(bytes.fromhex(ev["sig"]), chip + bytes.fromhex(ev["report_data"]),
                        ec.ECDSA(hashes.SHA384()))
-            return True, chip
+            return True, _usable_anchor(chip)
         except Exception:
             return False, None
     return verify
@@ -80,7 +89,7 @@ def sevsnp_verifier():
         r = int.from_bytes(b[0x2A0:0x2A0+72][::-1],"big"); s = int.from_bytes(b[0x2A0+72:0x2A0+144][::-1],"big")
         try:
             cert.public_key().verify(utils.encode_dss_signature(r,s), b[:0x2A0], ec.ECDSA(hashes.SHA384()))
-            return True, chip
+            return True, _usable_anchor(chip)
         except Exception:
             return False, None
     return verify

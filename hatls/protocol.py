@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
 """
-HATLS v0 — Hybrid Attested TLS with a Continuity Mandate.
+HATLS v0.2 — Hybrid Attested TLS with a Continuity Mandate.
 
-One protocol that unifies the two SEAT camps and adds the piece the WG use-cases (3.8.1, 4.8)
-names but nobody specifies: continuity to a platform instance, with revocation on fork.
+A RATS continuity layer that sits above a transport binder. The binder proves "this TLS session
+talks to a TEE"; the continuity layer proves "and it is still the SAME enrolled instance, in an
+unbroken order, and here is what happens when it is not".
 
-Design (see HYBRID-DESIGN.md, GAP-ANALYSIS.md):
+  intra_link  = HKDF(transcript_checkpoint, TIK_pub)         # the early binder, public transcript
+  post_link_n = HKDF(exporter, prev_link || counter_n)       # the post binder, shared secret + order
+  Evidence_n  : a TEE report whose REPORT_DATA = SHA-512("HATLS-continuity-v0" || post_link_n)
+  Mandate     : an authority over an identity. It admits ONE continuous, ordered, anchor-consistent
+                chain per identity, and names the impostor instead of destroying the identity.
 
-  intra_link = HKDF(transcript_checkpoint, TIK_pub)          # Camp 1: early, public transcript
-  post_link_n = HKDF(exporter, prev_link || counter_n)       # Camp 2: shared secret + order
-  Evidence_n : a TEE report whose REPORT_DATA = SHA-512(post_link_n)   # binds the link to HARDWARE
-  Mandate    : a ledger keyed by TIK_pub. It admits ONE continuous, ordered, chip-consistent chain.
-               A second chip under the same TIK, or a broken/replayed counter, is a FORK -> REVOKE.
+Three rules this version enforces that v0.1 did not (see docs/AUDIT.md):
+  1. ENROLMENT BINDS THE KEY. The enrolment report must cover a PKCS#10 CSR that carries the very
+     public key being enrolled and is self-signed by its private key (proof of possession), against
+     a nonce the mandate itself issued. Enrolment is first-write-wins.
+  2. THE ANCHOR MUST EXIST. A platform that reports no usable instance anchor (e.g. an all-zero
+     SEV-SNP CHIP_ID under a shared-tenancy VLEK) FAILS CLOSED. It never silently compares equal.
+  3. AN IMPOSTOR CANNOT REVOKE THE VICTIM. Evidence from the wrong anchor rejects the presenter and
+     records contention. Revocation is an explicit, operator-driven act.
 
 This module is transport- and TEE-agnostic. The TEE is injected: `tee.report(report_data)` returns
-signed Evidence; `verify_report(...)` checks it. For local debugging we use a MockTEE (an ephemeral
-signing key standing in for the AMD SP). On hardware the same calls hit /dev/sev-guest and the VCEK.
+signed Evidence; `verify_report(evidence, expected_report_data) -> (ok, anchor)` checks it, where
+`anchor` is None when the platform exposes no usable instance identifier.
 """
-import hashlib, hmac, json, time
+import hashlib, hmac
 
 # ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
@@ -38,6 +46,29 @@ def post_link(exporter, prev_link, counter):
 def report_data_for(link):
     return hashlib.sha512(b"HATLS-continuity-v0" + link).digest()   # 64 bytes for REPORT_DATA
 
+# ---------- enrolment credential: a real CSR, self-signed (proof of possession) -------
+def make_enrolment_csr(tik_private_key, subject_cn="hatls-identity"):
+    """Build the PKCS#10 CSR that the chip will sign over. Self-signed by the identity key, so it
+    is itself the proof that whoever asks for enrolment holds the private half."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    csr = (x509.CertificateSigningRequestBuilder()
+           .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)]))
+           .sign(tik_private_key, hashes.SHA256()))
+    return csr.public_bytes(serialization.Encoding.DER)
+
+def csr_public_key_der(csr_der):
+    """Return the SPKI DER carried by the CSR, but ONLY if the CSR's own signature verifies.
+    Raises on a malformed CSR or a CSR whose signature does not match its public key."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    csr = x509.load_der_x509_csr(csr_der)
+    if not csr.is_signature_valid:
+        raise ValueError("CSR signature invalid: no proof of possession")
+    return csr.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
 # ---------- the Attester side (runs inside the guest/TEE) -----------------------------
 class Attester:
     def __init__(self, tee, tik_pub):
@@ -55,81 +86,141 @@ class Attester:
         return msg
 
 # ---------- the Mandate (runs at the Relying Party) ----------------------------------
-class Mandate:
-    """Admits one continuous, ordered, chip-consistent chain per TIK. Forks are revoked."""
-    def __init__(self, verify_report):
-        self.verify_report = verify_report
-        self.state = {}       # tik_pub_hex -> {"chip":.., "prev":.., "counter":.., "revoked":bool}
-        self.enrolled = {}    # tik_pub_hex -> chip  (baseline: which chip this key was born on)
-        self.log = []
+class NoAnchor(Exception):
+    """The platform exposes no usable instance anchor, so continuity-to-an-instance is undecidable."""
 
-    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der):
-        """One-time: the chip signs that THIS key (its CSR) was created on it (TACRA binding:
-        REPORT_DATA = SHA-512(nonce || CSR)). The mandate records tik_pub -> chip as the ground
-        truth. After this, any Evidence for tik_pub on a different chip is rejected on the FIRST
-        message, without needing to see a second (victim) chain -- prevention, not just detection."""
-        expected_rd = hashlib.sha512(nonce + csr_der).digest()
-        ok, chip = self.verify_report(enroll_evidence, expected_rd)
-        if not ok:
-            self._emit(("enroll-rejected", tik_pub.hex()[:16])); return False, "enrollment evidence invalid"
-        self.enrolled[tik_pub.hex()] = chip
-        self._emit(("enrolled", tik_pub.hex()[:16], (chip or b"").hex()[:12]))
-        return True, "enrolled"
+class Mandate:
+    """Admits one continuous, ordered, anchor-consistent chain per identity.
+
+    require_anchor=True (the default) is the safe setting: a platform that cannot name its own
+    instance is refused rather than silently accepted. Setting it False degrades the mandate to
+    ordering-and-freshness only: replay and relay are still caught, RE-HOSTING IS NOT. The mandate
+    records that downgrade in its log so an auditor can see which guarantee was actually in force.
+    """
+    def __init__(self, verify_report, require_anchor=True):
+        self.verify_report = verify_report
+        self.require_anchor = require_anchor
+        self.state = {}        # tik_pub_hex -> {"anchor":.., "prev":.., "counter":.., "revoked":bool}
+        self.enrolled = {}     # tik_pub_hex -> anchor   (which instance this key was born on)
+        self.contention = {}   # tik_pub_hex -> [reasons]  (evidence of a dispute, not a verdict)
+        self._challenges = set()
+        self.log = []
 
     def _emit(self, ev): self.log.append(ev)
 
+    # ---- challenge/response: the mandate picks the nonce, so enrolment cannot be replayed ----
+    def challenge(self):
+        import os as _os
+        n = _os.urandom(32); self._challenges.add(n); return n
+
+    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der):
+        """One-time: bind an identity key to the instance it was born on.
+
+        Requires (a) a nonce this mandate issued and has not yet spent, (b) a CSR that carries
+        EXACTLY tik_pub and is self-signed by its private half, (c) a TEE report over
+        SHA-512(nonce || CSR) from a platform with a usable anchor. First write wins."""
+        k = tik_pub.hex()
+        if nonce not in self._challenges:
+            self._emit(("enroll-rejected", k[:16], "stale or unissued nonce"))
+            return False, "nonce was not issued by this mandate (replay)"
+        if k in self.enrolled:
+            self._emit(("enroll-rejected", k[:16], "already enrolled"))
+            return False, "identity already enrolled; re-enrolment is an operator action"
+        try:
+            csr_spki = csr_public_key_der(csr_der)
+        except Exception as e:
+            self._emit(("enroll-rejected", k[:16], f"bad CSR: {e}"))
+            return False, f"CSR unusable: {e}"
+        if csr_spki != tik_pub:
+            self._emit(("enroll-rejected", k[:16], "CSR carries a different key"))
+            return False, "CSR does not carry the key being enrolled"
+        expected_rd = hashlib.sha512(nonce + csr_der).digest()
+        ok, anchor = self.verify_report(enroll_evidence, expected_rd)
+        if not ok:
+            self._emit(("enroll-rejected", k[:16], "evidence invalid"))
+            return False, "enrolment evidence invalid"
+        if anchor is None:
+            self._emit(("enroll-rejected", k[:16], "platform exposes no instance anchor"))
+            return False, ("platform exposes no usable instance anchor (masked CHIP_ID): "
+                           "continuity-to-an-instance cannot be enrolled here")
+        self._challenges.discard(nonce)
+        self.enrolled[k] = anchor
+        self._emit(("enrolled", k[:16], anchor.hex()[:12]))
+        return True, "enrolled"
+
+    def revoke(self, tik_pub, reason="operator"):
+        """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
+        k = tik_pub.hex()
+        st = self.state.setdefault(k, {"anchor":None,"prev":None,"counter":-1,"revoked":False})
+        st["revoked"] = True
+        self._emit(("revoked", k[:16], reason))
+        return True, f"identity revoked: {reason}"
+
+    def _dispute(self, k, reason):
+        self.contention.setdefault(k, []).append(reason)
+
     def present(self, tik_pub, transcript_hash, exporter, msg, new_session=False):
-        """A Relying Party (or a shared mandate service) appraises one attestation step.
+        """Appraise one attestation step.
 
-        The mandate is a SHARED, append-only authority over an identity, not per-connection state:
-        this is what lets it see a stolen key used against a different Relying Party. `new_session`
-        marks the first link of a fresh TLS session (a legitimate reconnect starts a new sub-chain).
+        `exporter` MUST be derived by the Relying Party from ITS OWN side of the TLS session.
+        A value copied out of the peer's message proves nothing and defeats relay detection; see
+        hatls.client, which derives it for you.
 
-        Returns (accepted, reason)."""
+        Returns (accepted, reason). A rejected presenter never revokes the identity it claims."""
         k = tik_pub.hex()
         st = self.state.get(k)
         if st and st["revoked"]:
             self._emit(("declined-revoked", k[:16], msg["counter"]))
-            return False, "identity already revoked"
+            return False, "identity revoked"
 
-        # 1) verify the hardware Evidence and that it binds THIS post_link
+        # 1) the hardware Evidence must be valid AND bind exactly this post_link
         pl = bytes.fromhex(msg["post_link"])
-        ok, chip = self.verify_report(msg["evidence"], report_data_for(pl))
+        ok, anchor = self.verify_report(msg["evidence"], report_data_for(pl))
         if not ok:
             self._emit(("declined-evidence", k[:16], msg["counter"]))
             return False, "evidence invalid or does not bind the link"
 
-        # 1a) ENROLLMENT GATE (prevention). If this identity was enrolled to a chip, any Evidence
-        #     on a different chip is a stolen key, caught on the FIRST message -- no victim needed.
-        enrolled_chip = self.enrolled.get(k)
-        if enrolled_chip is not None and chip is not None and chip != enrolled_chip:
-            self._emit(("blocked-enrollment", k[:16], enrolled_chip.hex()[:12], chip.hex()[:12], msg["counter"]))
-            if st: st["revoked"] = True
-            return False, "blocked at first message: key presented on a chip it was not enrolled on"
+        # 1a) FAIL CLOSED on a platform that cannot name its own instance. An all-zero anchor is
+        #     not an identity: on such a platform every machine looks alike, so accepting it would
+        #     silently hand out a guarantee we cannot keep.
+        if anchor is None:
+            if self.require_anchor:
+                self._emit(("declined-no-anchor", k[:16], msg["counter"]))
+                return False, ("platform exposes no usable instance anchor: re-hosting is "
+                               "undecidable here (set require_anchor=False to accept that)")
+            self._emit(("anchor-absent-downgraded", k[:16], msg["counter"]))
 
-        # 2) the non-copyable anchor: the SAME identity must always be on the SAME chip.
-        #    A stolen key on genuine-but-different silicon is a re-host, whatever else checks out.
-        if st and chip is not None and st["chip"] is not None and chip != st["chip"]:
-            self._emit(("revoke-fork-chip", k[:16], st["chip"].hex()[:12], chip.hex()[:12], msg["counter"]))
-            st["revoked"] = True
-            return False, "continuity fork: same identity on a different chip (re-hosting)"
+        # 1b) ENROLMENT GATE. If this identity was enrolled, Evidence from any other instance is an
+        #     impostor -- rejected on its FIRST message. We know which instance is legitimate, so we
+        #     reject the PRESENTER and leave the victim's identity untouched.
+        enrolled_anchor = self.enrolled.get(k)
+        if enrolled_anchor is not None and anchor is not None and anchor != enrolled_anchor:
+            self._dispute(k, "evidence from a non-enrolled instance")
+            self._emit(("rejected-impostor", k[:16], enrolled_anchor.hex()[:12], anchor.hex()[:12], msg["counter"]))
+            return False, "rejected: key presented from an instance it was not enrolled on"
 
-        # 3) recompute the post_link ourselves. For a fresh session the base is the intra link of
-        #    THIS session; for a continuation it is the previous link we recorded.
+        # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent chain
+        #    and record a dispute. We do NOT destroy the identity on an unauthenticated claim.
+        if st and anchor is not None and st["anchor"] is not None and anchor != st["anchor"]:
+            self._dispute(k, "second instance under one identity")
+            self._emit(("contention-anchor", k[:16], st["anchor"].hex()[:12], anchor.hex()[:12], msg["counter"]))
+            return False, ("continuity contention: a second instance claims this identity "
+                           "(no enrolment on record, so the mandate refuses to pick a winner)")
+
+        # 3) recompute the post_link ourselves
         il = intra_link(transcript_hash, tik_pub)
         base = il if (new_session or st is None) else st["prev"]
-        expect = post_link(exporter, base, msg["counter"])
-        if expect != pl:
-            self._emit(("revoke-fork-linkmismatch", k[:16], msg["counter"], (chip or b"").hex()[:12]))
-            if st: st["revoked"] = True
-            return False, "continuity fork: link does not chain (relay or replay)"
+        if post_link(exporter, base, msg["counter"]) != pl:
+            self._dispute(k, "link does not chain")
+            self._emit(("declined-linkmismatch", k[:16], msg["counter"]))
+            return False, "link does not chain (relay, replay or a foreign session)"
 
-        # 4) within a session the counter advances by exactly one; a fresh session resets to 0
+        # 4) within a session the counter advances by exactly one
         if st and not new_session and msg["counter"] != st["counter"] + 1:
-            self._emit(("revoke-fork-counter", k[:16], st["counter"], msg["counter"]))
-            st["revoked"] = True
-            return False, "continuity fork: counter did not advance by one (replay)"
+            self._dispute(k, "counter did not advance")
+            self._emit(("declined-counter", k[:16], st["counter"], msg["counter"]))
+            return False, "counter did not advance by one (replay or reorder)"
 
-        self.state[k] = {"chip": chip, "prev": pl, "counter": msg["counter"], "revoked": False}
-        self._emit(("accept", k[:16], msg["counter"], (chip or b"").hex()[:12], "new" if new_session else "cont"))
+        self.state[k] = {"anchor": anchor, "prev": pl, "counter": msg["counter"], "revoked": False}
+        self._emit(("accept", k[:16], msg["counter"], (anchor or b"").hex()[:12], "new" if new_session else "cont"))
         return True, "accepted; continuity intact"

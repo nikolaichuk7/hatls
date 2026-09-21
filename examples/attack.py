@@ -10,19 +10,25 @@ Run:  python3 attack.py            (all attacks)
       python3 attack.py relay      (just one)
 """
 import os, sys, hashlib, base64
-from hatls.protocol import Attester, Mandate, report_data_for, post_link, intra_link
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+from hatls.protocol import Attester, Mandate, report_data_for, post_link, intra_link, make_enrolment_csr
 from hatls.tee import MockTEE, mock_verifier
 
 CHIP_A=(b"\xa2\xb2\x58\x0a"*16)[:64]; CHIP_B=(b"\x76\x10\x22\xd0"*16)[:64]
-TIK=b"victim-TIK-public-key"
+TIK_PRIV=ec.generate_private_key(ec.SECP256R1())
+TIK=TIK_PRIV.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+CSR=make_enrolment_csr(TIK_PRIV)          # self-signed: it IS the proof of possession
 teeA=MockTEE(CHIP_A); teeB=MockTEE(CHIP_B)
 VERIFY=mock_verifier({teeA.pub.hex(), teeB.pub.hex()})   # both chips are genuine silicon
 
 def fresh_mandate(enroll=True):
     m=Mandate(VERIFY)
     if enroll:
-        nonce=os.urandom(32); csr=b"victim-CSR"
-        m.enroll(TIK, teeA.report(hashlib.sha512(nonce+csr).digest()), nonce, csr)
+        n=m.challenge()                   # the mandate picks the nonce, so enrolment cannot be replayed
+        ok,why=m.enroll(TIK, teeA.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+        assert ok, why
     return m
 
 def show(name, accepted, why):
@@ -92,8 +98,31 @@ def a_no_enrollment():
     print(f"  [WEAKER  ] no-enrolment first message: {'got in (caught later on fork)' if ok else 'stopped'} - {why}")
     return True  # informational, not a pass/fail
 
+
+def a_enrolment_hijack():
+    "attacker re-enrols the victim's PUBLIC key on his own chip, locking the owner out"
+    m=fresh_mandate()                      # victim legitimately enrolled on chip A
+    # the attacker knows only the PUBLIC key -- it is printed in the victim's TLS certificate
+    n=m.challenge()
+    m.enroll(TIK, teeB.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+    a=Attester(teeA,TIK); e=os.urandom(32); t=os.urandom(48)      # the REAL victim, its own chip
+    ok,why=m.present(TIK,t,e,a.attest(t,e),new_session=True)
+    # the attack SUCCEEDS when the rightful owner is refused
+    return show("enrolment hijack (lock the real owner out)", not ok, why)
+
+def a_masked_chip():
+    "genuine platform that reports an all-zero CHIP_ID (AWS shared-tenancy VLEK): anchor vanishes"
+    ZERO=bytes(64)
+    z1=MockTEE(ZERO); z2=MockTEE(ZERO)     # two DIFFERENT machines, identical masked identifier
+    m=Mandate(mock_verifier({z1.pub.hex(), z2.pub.hex()}))
+    n=m.challenge(); m.enroll(TIK, z1.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+    a=Attester(z2,TIK); e=os.urandom(32); t=os.urandom(48)        # stolen key on the OTHER machine
+    ok,why=m.present(TIK,t,e,a.attest(t,e),new_session=True)
+    return show("re-host on a masked-CHIP_ID platform", ok, why)
+
 ATTACKS={"honest":a_honest,"rehost":a_rehost,"replay":a_replay,"relay":a_relay,
-         "forge":a_forge_malleable,"rollback":a_rollback_counter,"splice":a_splice,"noenroll":a_no_enrollment}
+         "forge":a_forge_malleable,"rollback":a_rollback_counter,"splice":a_splice,"noenroll":a_no_enrollment,
+         "hijack":a_enrolment_hijack,"masked":a_masked_chip}
 
 if __name__=="__main__":
     which=sys.argv[1:] or list(ATTACKS)

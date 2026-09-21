@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
-"""HATLS guest probe — runs INSIDE a real SEV-SNP guest.
+"""HATLS guest probe -- runs INSIDE a real SEV-SNP guest.
 
-A TLS 1.3 server. For each client connection it derives the RFC 9266 exporter of THAT session and
-walks a continuity chain: for counter = 0,1,2,... it computes
-    post_link = HKDF(exporter, prev_link || counter)          (prev_link = intra_link at counter 0)
+A TLS 1.3 server. For each connection it derives, from ITS OWN side of the session, both the
+RFC 9266 exporter and a session context, then walks a continuity chain: for counter = 0,1,2,...
+
+    post_link = HKDF(exporter, prev_link || counter)      (prev_link = intra_link at counter 0)
+
 and requests a real VCEK-signed SEV-SNP report with
+
     REPORT_DATA = SHA-512("HATLS-continuity-v0" || post_link)
-so the hardware itself binds each link. The reports and the chain are archived. The shared TLS
-identity key (TIK) is injected by metadata, so a second guest launched with the same TIK models
-re-hosting. Everything the mandate needs to catch a fork is in the emitted JSON + the 1184-byte
-reports.
+
+so the hardware itself binds each link.
+
+IMPORTANT (changed after the 21 Sep 2026 audit): this probe no longer accepts a transcript from
+the client, and no longer sends its exporter or its public key on the wire. Both endpoints derive
+the binding values independently from their own side of the TLS session, and the verifier takes
+the identity key from the certificate the handshake proved possession of. A value that travels on
+the wire cannot distinguish a direct session from a relayed one -- that was the v0.1 defect.
+
+The TLS identity key (TIK) is injected by metadata, so a second guest launched with the same TIK
+models re-hosting.
 """
 import socket, json, hashlib, hmac, base64, struct, os, fcntl, ctypes, time
 
-LABEL = b"EXPORTER-Channel-Binding"
+EXPORTER_LABEL = b"EXPORTER-Channel-Binding"                 # RFC 9266
+CONTEXT_LABEL  = b"EXPERIMENTAL-hatls-session-context"
 
 def hkdf_expand_label(secret, label, ctx, n=32):
     full=b"tls13 "+label; info=n.to_bytes(2,"big")+bytes([len(full)])+full+bytes([len(ctx)])+ctx
@@ -40,7 +51,9 @@ def snp_report(user_data):
 
 def main():
     from OpenSSL import SSL, crypto
-    from cryptography.hazmat.primitives import serialization
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import serialization, hashes
     STAMP=time.strftime("%Y%m%dT%H%M%SZ",time.gmtime()); OUT=f"/root/hatls/{STAMP}"; os.makedirs(OUT,exist_ok=True); os.chdir(OUT)
     meta=lambda k: os.popen(f'curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/{k}').read()
     iid=meta("name"); zone=meta("zone").split("/")[-1]
@@ -59,31 +72,36 @@ def main():
         n+=1; s.setblocking(True); conn=SSL.Connection(ctx,s); conn.set_accept_state()
         try:
             conn.do_handshake()
-            # read: nonce_hex (transcript stand-in provided by client) then run a chain of REATTEST steps
             line=b""
             while not line.endswith(b"\n") and len(line)<300: line+=conn.recv(1)
             req=json.loads(line.strip())
             if req.get("enroll"):
-                nonce=bytes.fromhex(req["nonce"]); csr=bytes.fromhex(req["csr"])
+                # a real PKCS#10 CSR carrying THIS key, self-signed: the proof of possession.
+                nonce=bytes.fromhex(req["nonce"])
+                csr=(x509.CertificateSigningRequestBuilder()
+                     .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,"hatls-identity")]))
+                     .sign(priv,hashes.SHA256())).public_bytes(serialization.Encoding.DER)
                 rep=snp_report(hashlib.sha512(nonce+csr).digest())
-                out=json.dumps({"instance":iid,"zone":zone,"enroll":True,
+                out=json.dumps({"instance":iid,"zone":zone,"enroll":True,"csr":csr.hex(),
                                 "report":base64.b64encode(rep).decode()}).encode()
-                conn.sendall(struct.pack(">I",len(out))+out); 
+                conn.sendall(struct.pack(">I",len(out))+out)
+                open(f"conn{n:02d}-enroll.bin","wb").write(rep)
                 try: conn.shutdown()
                 except Exception: pass
                 s.close(); continue
-            th=bytes.fromhex(req["transcript"]); steps=int(req.get("steps",3))
-            exp=conn.export_keying_material(LABEL,32,b"")
-            chain=[]; prev=intra_link(th,tik_pub)
+            steps=int(req.get("steps",3))
+            exp=conn.export_keying_material(EXPORTER_LABEL,32,b"")
+            sc =conn.export_keying_material(CONTEXT_LABEL,48,b"")      # derived, never received
+            chain=[]; prev=intra_link(sc,tik_pub)
             for counter in range(steps):
-                pl=post_link(exp,prev if counter else intra_link(th,tik_pub),counter)
+                pl=post_link(exp,prev if counter else intra_link(sc,tik_pub),counter)
                 rep=snp_report(report_data_for(pl))
                 open(f"conn{n:02d}-c{counter}-report.bin","wb").write(rep)
                 chain.append({"counter":counter,"post_link":pl.hex(),"report":base64.b64encode(rep).decode()})
                 prev=pl
-            blob=json.dumps({"instance":iid,"zone":zone,"exporter":exp.hex(),
-                             "tik_pub":base64.b64encode(tik_pub).decode(),"cert":base64.b64encode(cert_pem).decode(),
-                             "chain":chain}).encode()
+            # NOTE: the exporter and the identity key are deliberately NOT sent. The verifier
+            # derives the first from its own session and reads the second from the certificate.
+            blob=json.dumps({"instance":iid,"zone":zone,"chain":chain}).encode()
             conn.sendall(struct.pack(">I",len(blob))+blob)
             json.dump(json.loads(blob),open(f"conn{n:02d}.json","w"))
             print(f"conn {n}: chain of {steps} links emitted, exporter {exp.hex()[:16]}",flush=True)
