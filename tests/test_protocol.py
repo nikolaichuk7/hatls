@@ -139,12 +139,12 @@ def test_the_caller_cannot_assert_its_way_past_the_counter():
 
 # ---------- a named gap, pinned so it cannot be forgotten ----------
 def test_restart_loses_enrolment_and_downgrades_the_guarantee():
-    """The in-process mandate does not survive a restart.
+    """The DEFAULT mandate keeps its ledger in memory, so a restart loses it.
 
-    This asserts a WEAKNESS on purpose. Nonces, enrolment records and the ledger live in memory, so
-    a restarted mandate no longer knows which instance an identity was enrolled on and silently
-    falls back to the weaker no-enrolment mode. When durable state lands, this test should fail --
-    that is the point of it. See README, 'The mandate is in-process'."""
+    This asserts a weakness on purpose, and it is still the default behaviour by design: a store
+    is a deployment decision, not something to fabricate silently. What changed is that there is
+    now a way out of it, and that the silent part can be closed independently -- see
+    tests/test_durability.py, `FileStore`, and `require_enrolment=True`."""
     m, tA, tB = _setup()
     assert TIK.hex() in m.enrolled
     restarted = Mandate(mock_verifier({tA.pub.hex(), tB.pub.hex()}))

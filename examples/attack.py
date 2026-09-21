@@ -123,14 +123,29 @@ def a_masked_chip():
     return show("re-host on a masked-CHIP_ID platform", ok, why)
 
 def a_mandate_restart():
-    "the relying party restarts: the mandate's in-memory enrolment record is gone"
-    fresh_mandate()                        # the victim had enrolled on chip A ...
-    m=Mandate(VERIFY)                      # ... and now the mandate process restarts, empty
-    a=Attester(teeB,TIK); e=os.urandom(32); t=os.urandom(48)      # the THIEF, on chip B
-    ok,why=m.present(TIK,t,e,a.attest(t,e))
-    print(f"  [WEAKER  ] mandate restart: "
-          f"{'got in -- the enrolment record did not survive' if ok else 'stopped'} - {why}")
-    return True                            # informational: a named gap, not a pass/fail attack
+    "the relying party restarts, and the impostor tries again while its ledger is empty"
+    import tempfile, shutil
+    from hatls.store import FileStore
+    e=os.urandom(32); t=os.urandom(48)
+    thief=lambda m: m.present(TIK, t, e, Attester(teeB,TIK).attest(t,e))
+
+    fresh_mandate()                                   # the victim enrolled ... on a mandate that
+    ok_mem,why_mem = thief(Mandate(VERIFY))           # ... kept the record only in memory
+    print(f"  [WEAKER  ] restart, in-memory ledger (the default): "
+          f"{'got in -- the record did not survive' if ok_mem else 'stopped'} - {why_mem}")
+
+    d=tempfile.mkdtemp(prefix="hatls-attack-")
+    try:
+        m=Mandate(VERIFY, store=FileStore(d))
+        n=m.challenge(); m.enroll(TIK, teeA.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+        ok_dur,why_dur = thief(Mandate(VERIFY, store=FileStore(d)))     # the process comes back
+        show("restart, durable ledger", ok_dur, why_dur)
+        m2=Mandate(VERIFY, require_enrolment=True)                      # ledger lost entirely
+        ok_pol,why_pol = thief(m2)
+        show("restart, ledger lost, require_enrolment=True", ok_pol, why_pol)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return True                            # informational: shows the default AND the two fixes
 
 ATTACKS={"honest":a_honest,"rehost":a_rehost,"replay":a_replay,"relay":a_relay,
          "forge":a_forge_malleable,"rollback":a_rollback_counter,"splice":a_splice,"noenroll":a_no_enrollment,
