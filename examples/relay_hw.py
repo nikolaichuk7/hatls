@@ -81,9 +81,11 @@ def main():
               "report_data": hashlib.sha512(nonce + csr).digest().hex()}
         ok, why = m.enroll(tik, ev, nonce, csr)
         import base64
-        chip = base64.b64decode(r["report"])[0x1A0:0x1E0].hex()[:16]
-        print(f"   zone {r['zone']}, chip {chip}: enrolled={ok} ({why})")
-        out["enrolled"] = ok; out["chip"] = chip; out["zone"] = r["zone"]
+        from hatls.tee import parse_snp, snp_anchor
+        f = parse_snp(base64.b64decode(r["report"])); a = snp_anchor(f)
+        inst = a["instance"].hex()[:16]; place = a["place"].hex()[:16] if a["place"] else "masked"
+        print(f"   zone {r['zone']}, instance {inst}, place {place}: enrolled={ok} ({why})")
+        out["enrolled"] = ok; out["instance"] = inst; out["place"] = place; out["zone"] = r["zone"]
         json.dump(r, open(f"{OUT}/enroll.json", "w"))
         if not ok: return 1
 

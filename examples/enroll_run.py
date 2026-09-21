@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Enrolment prevention on live hardware: A enrols; B (same key, other chip) is blocked on its
-FIRST message, with no victim chain needed -- and without touching A's identity.
+"""Enrolment prevention on live hardware: A enrols; B (same key, other INSTANCE) is blocked on
+its FIRST message, with no victim chain needed -- and without touching A's identity.
+
+Identity is anchored on the instance claim (REPORT_ID), not on the silicon: two guests on one
+socket share a CHIP_ID, and a shared-tenancy platform has none at all. The run prints both.
 
 The enrolment credential is a real PKCS#10 CSR carrying the identity key and self-signed by it
 (proof of possession), covered by a TEE report over a nonce THIS mandate issued. v0.1 used a
@@ -30,7 +33,12 @@ def main():
         ev = {"kind": "sev-snp", "report": r["report"],
               "report_data": hashlib.sha512(nonce + csr).digest().hex()}
         ok, why = m.enroll(tik, ev, nonce, csr)
-        print(f"   guest A zone {r['zone']}: enrolled={ok} ({why})")
+        from hatls.tee import parse_snp, snp_anchor
+        import base64 as _b
+        aA = snp_anchor(parse_snp(_b.b64decode(r["report"])))
+        print(f"   guest A zone {r['zone']}: instance {aA['instance'].hex()[:16]}, "
+              f"place {aA['place'].hex()[:16] if aA['place'] else 'masked'}")
+        print(f"   enrolled={ok} ({why})")
         if not ok: return 1
 
     print("\n=== ATTACK: guest B holds the same identity key, presents a chain ===")
