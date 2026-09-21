@@ -8,5 +8,13 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt pytest
-      - run: PYTHONPATH=. python3 -m pytest tests/ -v
-      - run: PYTHONPATH=. python3 examples/attack.py
+      - name: unit and regression tests (incl. real SEV-SNP corpus, offline)
+        run: PYTHONPATH=. python3 -m pytest tests/ -v
+      - name: attack playground must stop every attack
+        run: PYTHONPATH=. python3 examples/attack.py
+      - name: full local walkthrough
+        run: PYTHONPATH=. python3 examples/run_local.py
+      - name: relay defence over real TLS
+        run: PYTHONPATH=. python3 examples/relay_demo.py
+      - name: measured performance and correctness
+        run: HATLS_BENCH_N=200 PYTHONPATH=. python3 bench/benchmark.py

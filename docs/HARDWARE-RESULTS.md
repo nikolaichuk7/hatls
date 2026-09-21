@@ -1,3 +1,81 @@
+> **Read [AUDIT.md](AUDIT.md) first.** The run immediately below is the current one, made with the
+> corrected code on 21 Sep 2026. **Everything after it is a historical record of earlier runs,**
+> kept unedited because evidence should not be rewritten after the fact.
+>
+> Those earlier runs were produced by v0.1, whose client read the TLS exporter and the identity key
+> out of the peer's own message and whose enrolment never bound the key to the chip. What still
+> stands in them: the reports are genuine, the chips and signatures are real, and re-hosting across
+> two distinct chips was genuinely detected. What does not: any relay resistance they seem to
+> imply, because the client of the day could not have detected a relay; and the revocation of guest
+> A once guest B appeared, which is now understood as an attack on the victim, not a success.
+
+# Run of 21 September 2026, corrected code (`audit/p0-hardening`)
+
+Two AMD SEV-SNP confidential VMs on Google Cloud, launched with the **same** TLS identity key so
+that the second models re-hosting. Both deleted afterwards; `gcloud compute instances list` returns
+nothing. Evidence: `evidence/relay-hw-20260921T183741Z/`, `evidence/enroll-20260921T183801Z/`,
+`evidence/20260921T183842Z/` — 16 genuine 1184-byte reports across two distinct chips.
+
+| | |
+|---|---|
+| guest A | `europe-west4-b`, chip `dd92cae137e7f2cf` |
+| guest B | `europe-west4-a`, chip `15f90cb088627a60` |
+| Evidence | VCEK-signed, fetched from AMD KDS, path-validated to the ARK, `POLICY.DEBUG` refused |
+
+## 1. Relay, with a real stolen key, against a real confidential VM
+
+`examples/relay_hw.py`. A relay on the operator machine holds guest A's genuine TLS key,
+terminates our TLS with it, opens its own session to the VM, and forwards the guest's genuine
+VCEK-signed reports **untouched**. Nothing is forged; AMD's signature covers every byte it passes.
+
+```
+direct   counter 0,1 : accepted
+relayed  counter 0   : REJECTED -- link does not chain
+guest-side exporter c903cd6742fd8d82  !=  client-side 1f7debc3f3174911
+```
+
+This is the claim v0.1 could not have supported: its client read the exporter out of the peer's
+message, which a relay forwards unchanged. The defence works because the verifier now derives that
+value from its own side of the connection ([AUDIT.md](AUDIT.md) finding 1).
+
+## 2. Enrolment prevention — the impostor is stopped on its first message
+
+`examples/enroll_run.py`. Guest A enrols with a real PKCS#10 CSR carrying its identity key,
+self-signed as proof of possession, over a nonce the mandate issued.
+
+```
+enrol guest A (chip dd92cae137e7)            : enrolled
+guest B, same key, chip 15f90cb08862, msg #0 : REJECTED -- not the instance it was enrolled on
+guest A afterwards                           : ACCEPTED -- the victim is untouched
+```
+
+The last line is the difference from v0.1, which revoked guest A at this point. An impostor
+presenting a stolen key can no longer destroy the identity it is impersonating
+([AUDIT.md](AUDIT.md) finding 3).
+
+## 3. Contention — no enrolment on record
+
+`examples/client_mandate.py`, the weaker deployment. The mandate cannot tell owner from thief, so
+it protects the incumbent and records the dispute instead of picking a winner.
+
+```
+A counter 0,1,2 : accepted
+B counter 0     : REJECTED -- continuity contention, second instance claims this identity
+A afterwards    : ACCEPTED -- still serving
+```
+
+## What this run does and does not show
+
+It shows, on live silicon: relay resistance with a genuinely stolen key, first-message prevention
+of re-hosting, survival of the victim under both modes, and a verifier that path-validates to the
+AMD root rather than trusting the first key it is handed.
+
+It does not show: any platform other than GCP SEV-SNP Milan; the masked-anchor case, which by
+construction cannot be demonstrated as working because HATLS refuses to operate there; sealing;
+or the physical-insider case.
+
+---
+
 # HATLS on real hardware: the full cycle, including re-hosting and revocation
 
 Live run 21 September 2026, run id `20260921T135827Z`. Two genuine AMD SEV-SNP guests on Google

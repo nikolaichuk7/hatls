@@ -3,8 +3,17 @@
 
 Both expose the same contract:
     tee.report(report_data: bytes[64]) -> evidence (dict)
-    verify(evidence, expected_report_data) -> (ok: bool, chip_id: bytes|None)
+    verify(evidence, expected_report_data) -> (ok: bool, anchor: bytes|None)
+
+`anchor` is the platform's instance identifier. It is None when the platform does not expose a
+usable one -- notably an all-zero SEV-SNP CHIP_ID, which is what a shared-tenancy VLEK-signed
+report carries. Measured on our own archive: six distinct AWS instances all report zeros, so a
+zero anchor is NOT an identity and must never be compared as if it were. The report itself is
+still valid; only the instance question is unanswerable.
 """
+def _usable_anchor(chip):
+    """None for an absent/masked identifier, otherwise the identifier itself."""
+    return None if (chip is None or not any(chip)) else chip
 import hashlib, os, json, base64, subprocess
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
@@ -34,7 +43,7 @@ def mock_verifier(trusted_pubs):
         try:
             pub.verify(bytes.fromhex(ev["sig"]), chip + bytes.fromhex(ev["report_data"]),
                        ec.ECDSA(hashes.SHA384()))
-            return True, chip
+            return True, _usable_anchor(chip)
         except Exception:
             return False, None
     return verify
@@ -51,36 +60,136 @@ class SevSnpTEE:
         return {"kind": "sev-snp", "report": base64.b64encode(raw).decode(),
                 "report_data": report_data.hex()}
 
-def sevsnp_verifier():
-    """Verify a real 1184-byte report: parse CHIP_ID/TCB, fetch VCEK from KDS, check P-384 sig,
-    check REPORT_DATA. Reuses the logic proven in ietf/analysis/snp_verify_sigs.py."""
-    import urllib.request, os, hashlib, time
+# ---- SEV-SNP ATTESTATION_REPORT, ABI Table 21 ----
+_OFF = {"version":0x00, "policy":0x08, "flags":0x48, "report_data":0x50, "measurement":0x90,
+        "host_data":0xC0, "report_id":0x140, "reported_tcb":0x180, "chip_id":0x1A0, "sig":0x2A0}
+POLICY_DEBUG = 1 << 19          # host may inspect guest memory: any key inside is unprotected
+
+def parse_snp(b):
+    """Field view of a 1184-byte report. Offsets and the signing-key encoding are the ones our
+    geoAR verifier corpus was measured with (103 reports, 3 clouds)."""
+    import struct
+    if len(b) != 1184: raise ValueError(f"not a 1184-byte report: {len(b)}")
+    flags = struct.unpack_from("<I", b, _OFF["flags"])[0]
+    tcb   = struct.unpack_from("<Q", b, _OFF["reported_tcb"])[0]
+    ver   = struct.unpack_from("<I", b, _OFF["version"])[0]
+    chip  = b[_OFF["chip_id"]:_OFF["chip_id"]+64]
+    if ver < 3: product = "Milan"
+    else:
+        fam, mod = b[0x188], b[0x189]
+        product = ("Milan" if fam == 0x19 and mod <= 0x0f else
+                   "Genoa" if fam == 0x19 and 0x10 <= mod <= 0x1f else
+                   "Turin" if fam == 0x1a else "Milan")
+    return {"version": ver, "product": product,
+            "signing_key": {0:"VCEK", 1:"VLEK", 7:"none"}.get((flags >> 2) & 7, (flags >> 2) & 7),
+            "mask_chip_key": (flags >> 1) & 1,
+            "policy": struct.unpack_from("<Q", b, _OFF["policy"])[0],
+            "chip_id": chip, "chip_id_zero": chip == bytes(64),
+            "measurement": b[_OFF["measurement"]:_OFF["measurement"]+48],
+            "host_data": b[_OFF["host_data"]:_OFF["host_data"]+32],
+            "report_id": b[_OFF["report_id"]:_OFF["report_id"]+32],
+            "report_data": b[_OFF["report_data"]:_OFF["report_data"]+64],
+            "tcb": (tcb & 0xff, (tcb >> 8) & 0xff, (tcb >> 48) & 0xff, (tcb >> 56) & 0xff)}
+
+def snp_anchor(f):
+    """The instance anchor, or None when the platform does not expose one.
+
+    Two independent signals, because they do not agree in practice: the firmware can set
+    MASK_CHIP_KEY, and a platform can simply zero the field. Measured on our archive: 15 AWS
+    shared-tenancy VLEK reports carry an all-zero CHIP_ID with MASK_CHIP_KEY *clear* -- the
+    identifier is hidden without the flag that says so, so trusting the flag alone would hand back
+    64 zero bytes as if they were an identity."""
+    return None if (f["mask_chip_key"] or f["chip_id_zero"]) else f["chip_id"]
+
+def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark_sha256=None):
+    """Verify a real 1184-byte report and appraise the platform it came from.
+
+      * signature over the report body by the leaf key AMD issued for this CHIP_ID and TCB;
+      * that leaf chains to the AMD root: VCEK -> ASK -> ARK, ARK self-signed (require_chain);
+      * the guest POLICY does not permit DEBUG, which would let the host read the key (allow_debug);
+      * the launch MEASUREMENT equals a pinned value, when one is given;
+      * REPORT_DATA binds exactly the link we were asked about.
+
+    Returns (ok, anchor). `anchor` is None on a platform that exposes no instance identifier; the
+    caller decides whether that is acceptable -- Mandate(require_anchor=True) refuses it.
+    """
+    import urllib.request, urllib.error, os, hashlib, time
     from cryptography import x509
-    from cryptography.hazmat.primitives.asymmetric import utils
-    cache_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)),"vcek-cache"); os.makedirs(cache_dir,exist_ok=True)
-    def fetch_vcek(chip,t):
-        key=hashlib.sha256(chip+bytes(t)).hexdigest()[:32]; fp=os.path.join(cache_dir,key+".der")
-        if os.path.exists(fp): return open(fp,"rb").read()
-        url=(f"https://kdsintf.amd.com/vcek/v1/Milan/{chip.hex()}"
-             f"?blSPL={t[0]}&teeSPL={t[1]}&snpSPL={t[6]}&ucodeSPL={t[7]}")
+    from cryptography.hazmat.primitives.asymmetric import utils, rsa
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vcek-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    def _get(url, cache_key):
+        fp = os.path.join(cache_dir, cache_key)
+        if os.path.exists(fp): return open(fp, "rb").read()
         for attempt in range(6):
             try:
-                der=urllib.request.urlopen(url,timeout=60).read(); open(fp,"wb").write(der); return der
+                d = urllib.request.urlopen(url, timeout=60).read(); open(fp, "wb").write(d); return d
             except urllib.error.HTTPError as e:
-                if e.code==429: time.sleep(3+attempt*2); continue
+                if e.code == 429: time.sleep(3 + attempt * 2); continue
                 raise
-        raise RuntimeError("KDS 429 after retries")
+        raise RuntimeError(f"KDS rate-limited after retries: {url}")
+
+    def leaf_cert(f):
+        """The VCEK AMD issued for this CHIP_ID at this TCB. Returns (parsed, der)."""
+        if f["signing_key"] != "VCEK":
+            raise ValueError(f"{f['signing_key']}-signed report: AMD KDS does not publish this leaf "
+                             "by CHIP_ID; supply the cloud's certificate explicitly")
+        t = f["tcb"]
+        url = (f"https://kdsintf.amd.com/vcek/v1/{f['product']}/{f['chip_id'].hex()}"
+               f"?blSPL={t[0]}&teeSPL={t[1]}&snpSPL={t[2]}&ucodeSPL={t[3]}")
+        der = _get(url, hashlib.sha256(url.encode()).hexdigest()[:32] + ".der")
+        return x509.load_der_x509_certificate(der), der
+
+    def chain_ok(leaf_der, f):
+        """Path validation VCEK -> ASK -> ARK with ARK as the only trust anchor.
+
+        Done through OpenSSL on purpose. AMD signs ASK and ARK with RSASSA-PSS and encodes
+        trailerField=1 explicitly, which is the DEFAULT -- X.690 11.5 forbids that in DER, so
+        strict parsers (python-cryptography's Rust ASN.1) refuse to load the chain at all. A
+        verifier that treats "cannot parse the root" as "skip the root" silently drops back to
+        trusting whatever key signed the report. Measured 21 Sep 2026 on the live KDS endpoint.
+        """
+        import re
+        from OpenSSL import crypto as oc
+        pem = _get(f"https://kdsintf.amd.com/vcek/v1/{f['product']}/cert_chain",
+                   f"{f['product']}-chain.pem")
+        blocks = re.findall(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", pem, re.S)
+        if len(blocks) < 2: return False, "AMD chain did not contain ASK and ARK"
+        certs = [oc.load_certificate(oc.FILETYPE_PEM, b) for b in blocks]
+        ask, ark = certs[0], certs[-1]
+        if ark_sha256 and hashlib.sha256(
+                oc.dump_certificate(oc.FILETYPE_ASN1, ark)).hexdigest() != ark_sha256:
+            return False, "AMD root key does not match the pinned value"
+        store = oc.X509Store(); store.add_cert(ark)          # ARK alone is the trust anchor
+        try:
+            oc.X509StoreContext(store, oc.load_certificate(oc.FILETYPE_ASN1, leaf_der),
+                                chain=[ask]).verify_certificate()
+            return True, "chain ok"
+        except Exception as e:
+            return False, f"certificate chain broken: {e}"
+
     def verify(ev, expected_rd):
         if ev.get("kind") != "sev-snp": return False, None
-        b = base64.b64decode(ev["report"])
-        if len(b) != 1184: return False, None
-        if b[0x50:0x90] != expected_rd: return False, None
-        chip = b[0x1A0:0x1E0]; t = b[0x180:0x188]
-        cert = x509.load_der_x509_certificate(fetch_vcek(chip,t))
-        r = int.from_bytes(b[0x2A0:0x2A0+72][::-1],"big"); s = int.from_bytes(b[0x2A0+72:0x2A0+144][::-1],"big")
         try:
-            cert.public_key().verify(utils.encode_dss_signature(r,s), b[:0x2A0], ec.ECDSA(hashes.SHA384()))
-            return True, chip
+            b = base64.b64decode(ev["report"]); f = parse_snp(b)
         except Exception:
             return False, None
+        if f["report_data"] != expected_rd: return False, None
+        if (f["policy"] & POLICY_DEBUG) and not allow_debug:
+            return False, None          # DEBUG-capable guest: the host can read the key
+        if measurement is not None and f["measurement"] != measurement:
+            return False, None
+        try:
+            cert, cert_der = leaf_cert(f)
+            r = int.from_bytes(b[_OFF["sig"]:_OFF["sig"]+48], "little")
+            s = int.from_bytes(b[_OFF["sig"]+72:_OFF["sig"]+120], "little")
+            cert.public_key().verify(utils.encode_dss_signature(r, s), b[:_OFF["sig"]],
+                                     ec.ECDSA(hashes.SHA384()))
+            if require_chain:
+                ok, _why = chain_ok(cert_der, f)
+                if not ok: return False, None
+        except Exception:
+            return False, None
+        return True, snp_anchor(f)
     return verify

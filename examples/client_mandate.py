@@ -1,66 +1,64 @@
 #!/usr/bin/env python3
-"""HATLS client + shared Mandate, run on the operator machine against REAL guests.
+"""HATLS client + shared Mandate, run on the operator machine against REAL SEV-SNP guests.
 
-Connects to each guest, drives a continuity chain, and feeds every step through the Mandate with
-the REAL SEV-SNP verifier (VCEK from AMD KDS). Guest A is the victim; guest B holds the same TIK
-on different silicon (re-hosting). The mandate must accept A's chain and REVOKE on B via chip-fork.
+Guest A is the victim. Guest B holds the SAME identity key on different silicon: re-hosting.
+This run uses NO enrolment, which is the weaker deployment, and shows what the mandate does when
+it cannot tell owner from thief: it protects the incumbent chain, records the dispute, and REFUSES
+to destroy the identity on an unauthenticated claim. (v0.1 revoked the victim here -- see
+docs/AUDIT.md. Run enroll_run.py for the strong deployment, where B is blocked on its first
+message and no dispute arises at all.)
+
+Every binding value is derived locally: the exporter from our own TLS session, the identity key
+from the certificate the guest proved possession of. Nothing security-relevant is read off the wire.
 """
-import socket, ssl, json, struct, base64, hashlib, sys, os, time
+import json, base64, hashlib, sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from hatls.protocol import Mandate, report_data_for
 from hatls.tee import sevsnp_verifier
+from hatls.client import HatlsClient
 
-def drive(ip, transcript_hex, steps=3, port=8443):
-    ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
-    ctx.minimum_version=ssl.TLSVersion.TLSv1_3
-    raw=socket.create_connection((ip,port),timeout=30)
-    tls=ctx.wrap_socket(raw,server_hostname="hatls")
-    tls.send((json.dumps({"transcript":transcript_hex,"steps":steps})+"\n").encode())
-    n=struct.unpack(">I",_recv(tls,4))[0]; blob=json.loads(_recv(tls,n)); tls.close()
-    return blob
-def _recv(s,n):
-    b=b""
-    while len(b)<n: b+=s.recv(n-len(b))
-    return b
+def as_evidence(step):
+    return {"counter": step["counter"], "post_link": step["post_link"],
+            "evidence": {"kind": "sev-snp", "report": step["report"],
+                         "report_data": report_data_for(bytes.fromhex(step["post_link"])).hex()}}
+
+def run(m, ip, label, steps, results, out=None):
+    with HatlsClient(ip, 8443) as cl:
+        blob = cl.request({"steps": steps})
+        if out: json.dump(blob, open(out, "w"))
+        tik = cl.peer_identity_key
+        last = None
+        for step in blob["chain"]:
+            ok, why = m.present(tik, cl.session_context, cl.exporter, as_evidence(step))
+            results.append((label, step["counter"], ok, why)); last = ok
+            print(f"   {label} counter {step['counter']}: accepted={ok}  {why}")
+            if not ok: break
+        return blob, last
 
 def main():
     ipA, ipB = sys.argv[1], sys.argv[2]
-    transcript = hashlib.sha384(b"hatls-hw-run-"+str(int(time.time())).encode()).digest().hex()
-    OUT=f"evidence/{time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())}"; os.makedirs(OUT,exist_ok=True)
-    m=Mandate(sevsnp_verifier()); results=[]
-
-    def feed(tag, blob, tik_pub, new_session):
-        exp=bytes.fromhex(blob["exporter"])
-        for step in blob["chain"]:
-            msg={"counter":step["counter"],"post_link":step["post_link"],
-                 "evidence":{"kind":"sev-snp","report":step["report"],
-                             "report_data":report_data_for(bytes.fromhex(step["post_link"])).hex()}}
-            ns = new_session and step["counter"]==0
-            ok,why=m.present(tik_pub, bytes.fromhex(transcript), exp, msg, new_session=ns)
-            results.append((tag,step["counter"],ok,why))
-            print(f"   {tag} counter {step['counter']}: accepted={ok}  {why}")
-            if not ok: break
+    OUT = f"evidence/{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"; os.makedirs(OUT, exist_ok=True)
+    m = Mandate(sevsnp_verifier()); results = []
 
     print(f"=== VICTIM: guest A ({ipA}) presents its continuity chain ===")
-    bA=drive(ipA, transcript, steps=3); json.dump(bA,open(f"{OUT}/guestA.json","w"))
-    tik=base64.b64decode(bA["tik_pub"])
-    feed("A", bA, tik, new_session=True)
+    bA, okA = run(m, ipA, "A", 3, results, f"{OUT}/guestA.json")
 
-    print(f"\n=== RE-HOSTING: guest B ({ipB}) holds the SAME TIK on different silicon ===")
-    bB=drive(ipB, transcript, steps=3); json.dump(bB,open(f"{OUT}/guestB.json","w"))
-    tikB=base64.b64decode(bB["tik_pub"])
-    print(f"   same TIK on both guests: {tik==tikB}")
+    print(f"\n=== RE-HOSTING: guest B ({ipB}) holds the SAME identity on different silicon ===")
+    bB, okB = run(m, ipB, "B", 3, results, f"{OUT}/guestB.json")
     print(f"   guest A zone {bA['zone']}, guest B zone {bB['zone']}")
-    feed("B", bB, tikB, new_session=True)
 
-    print(f"\n=== VICTIM A tries to continue after the fork ===")
-    bA2=drive(ipA, transcript, steps=1)
-    feed("A-after", bA2, tik, new_session=True)
+    print(f"\n=== THE VICTIM MUST SURVIVE THE IMPOSTOR ===")
+    _, okA2 = run(m, ipA, "A-after", 1, results)
 
     print("\n--- mandate audit log ---")
-    for e in m.log: print("   ",e)
-    json.dump({"transcript":transcript,"results":results,"log":[list(map(str,e)) for e in m.log]},
-              open(f"{OUT}/verdict.json","w"))
+    for e in m.log: print("   ", e)
+    verdict = {"impostor_rejected": okB is False, "victim_still_serving": okA2 is True,
+               "contention_recorded": {k: v for k, v in m.contention.items()},
+               "results": results, "log": [list(map(str, e)) for e in m.log]}
+    json.dump(verdict, open(f"{OUT}/verdict.json", "w"), indent=1)
+    print(f"\n  impostor rejected   : {verdict['impostor_rejected']}")
+    print(f"  victim still serving: {verdict['victim_still_serving']}")
     print(f"\nevidence saved to {OUT}")
+    return 0 if (verdict["impostor_rejected"] and verdict["victim_still_serving"]) else 1
 
-if __name__=="__main__": main()
+if __name__ == "__main__": sys.exit(main())

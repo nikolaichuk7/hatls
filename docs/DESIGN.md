@@ -36,8 +36,16 @@ public and early, the exporter is secret and late (Fossati Appendix B says this 
 Define a continuity link computed the instant the handshake finishes and again at each
 re-attestation:
 
-    intra_link = HKDF(transcript_checkpoint, server_key)          # Camp 1 value, available at t1
-    link_n     = HKDF(exporter_n, intra_link || counter_n)        # Camp 2 secret + chain + order
+    intra_link = HKDF(transcript_checkpoint, server_key)          # design intent: a t1 value
+    link_n     = HKDF(exporter_n, intra_link || counter_n)        # shared secret + chain + order
+
+> **What the implementation actually does, which is not this.** In this repository `intra_link` is
+> computed over a *session context* that both endpoints derive from the completed TLS 1.3 key
+> schedule, not over the handshake transcript at t1. It therefore lives after t2, exactly like the
+> post links. Calling it a Camp 1 / early-attestation value would be wrong: it is HKDF over a
+> zero secret with an `EXPERIMENTAL-` label, and it delivers no Evidence inside the handshake.
+> Binding the true transcript needs a hook into the TLS stack and is an open item. Everything
+> HATLS *demonstrates* is post-handshake.
 
 On the real 11 Sep run:
 
@@ -67,11 +75,16 @@ view is fooled. Two things, and only two, address the key itself:
    fork and revokes. We measured exactly this shape in the product's failover-negatives drill: two
    endpoints presenting one sealed identity -> the second is declined.
 
-So the honest guarantee of "intra + post + mandate" is not "no substitution". It is
-**"no substitution without detection and revocation"**: crypto stops relay and replay outright
-(Windows B, C, D), and the mandate turns the one residual case (Window A, key theft) from silent
-success into a detected fork that costs the attacker the key. That is a real, defensible, and
-new combination -- and it is the honest ceiling, not "perfect security".
+So the honest guarantee of "binder + chain + mandate" is not "no substitution". It is
+**"no substitution without detection, and no silent success"**: the cryptography stops relay and
+replay outright (Windows B, C, D), and the mandate turns the one residual case (Window A, key
+theft) from silent success into either an outright refusal -- when the key was enrolled, so the
+mandate knows which instance is legitimate -- or a recorded contention, when it does not.
+
+What it deliberately does *not* do is revoke on an unauthenticated claim. Automatic revocation on
+fork makes a stolen key a weapon against its owner: anyone presenting it from any genuine chip
+could destroy the victim's identity. Revocation is an operator act taken on recorded evidence.
+That is the honest ceiling, not "perfect security".
 
 ## Why it can be light
 

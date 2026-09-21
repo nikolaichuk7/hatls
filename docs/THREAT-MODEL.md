@@ -12,16 +12,36 @@ other chip is rejected on the first message, with no victim present.
 
 | # | What the attacker achieved | Layer that stops it | Prevent or detect | Measured |
 |---|---|---|---|---|
-| 1 | Copied the TIK **key file** | **Sealed TIK**: file unseals only on its own chip | prevent | yes — `sealed-tik` run, 17 Sep (copy on another chip fails, exit 2) |
-| 2 | **Extracted the live key**, runs it in its **own** TEE | **Enrolment gate**: chip in Evidence != chip the key was enrolled on | prevent, first message | yes — local now; hardware run next |
-| 3 | Same, opens an **independent** session to a different Relying Party | **Shared mandate + enrolment**: baseline is per-identity, not per-connection | prevent, first message | yes — local now (no victim needed) |
+| 1 | Copied the TIK **key file** | **Sealed TIK**: file unseals only on its own chip | prevent | **designed, NOT implemented in this repository** — `scripts/launch.sh` deliberately ships one key to two guests, which is the stolen-key model demonstrated here |
+| 2 | **Extracted the live key**, runs it in its **own** TEE | **Enrolment gate**: anchor in Evidence != the instance the key was enrolled on | prevent, first message | yes — hardware run 21 Sep; enrolment now binds a real CSR with proof of possession (see [AUDIT.md](AUDIT.md) finding 2) |
+| 3 | Same, opens an **independent** session to a different Relying Party | **Shared ledger + enrolment**: the anchor baseline is per-identity even though the chain is per-connection | prevent, first message | yes — local, no victim needed |
 | 4 | Replays / reorders links **within** a legitimate session | **Continuity chain + counter** | detect, same message | yes — HATLS hw run, 21 Sep |
-| 5 | Relays a genuine session (holds the key) | **Exporter link** (post binder) | detect, first post link | yes — real relay run, 11 Sep (exporter differs) |
-| 6 | **Physically on the enrolled chip** (insider / stolen live machine) | **Continuity liveness + place** | detect (interruption / location) | partially — failover RTO drills; geoar place corpus |
+| 5 | Relays a genuine session (holds the key) | **Exporter link** (post binder), derived by the verifier from its OWN session | detect, first post link | yes — `examples/relay_demo.py`, real TLS + real relay, in CI. v0.1's client read the exporter off the wire and accepted relays ([AUDIT.md](AUDIT.md) finding 1) |
+| 6 | **Physically on the enrolled chip** (insider / stolen live machine) | **Continuity liveness + place** | detect (interruption / location) | partially — beacon cadence measured at 7.96 ms, which bounds detection *resolution*, not the attacker's window |
+| 7 | Re-hosts on a platform that **exposes no instance anchor** (AWS shared-tenancy VLEK) | none — the guarantee does not exist there | **fails closed** | yes — 15 archived VLEK reports carry an all-zero `CHIP_ID` with `MASK_CHIP_KEY` clear ([AUDIT.md](AUDIT.md) finding 4) |
 
-Layers 1-5 either prevent the attack outright or catch it on the message that carries it. Only
-layer 6 — an adversary with physical control of the exact enrolled chip while it runs — survives,
-and it is no longer a key-theft attack; it is physical possession of one specific machine.
+Layers 2-5 either prevent the attack outright or catch it on the message that carries it. Layer 1
+is designed but not implemented here. Layer 6 — an adversary with physical control of the exact
+enrolled chip while it runs — survives; it is no longer a key-theft attack but physical possession
+of one specific machine. Layer 7 is not a defence at all: it is a platform where the central claim
+cannot be made, and the honest response is to refuse rather than to pretend.
+
+Rejection targets the presenter. An impostor cannot revoke the identity it claims; revocation is an
+explicit operator act ([AUDIT.md](AUDIT.md) finding 3).
+
+## The mandate itself is not in this model, and that is now the largest gap
+
+Every row above assumes the mandate is correct and available. It is neither modelled nor durable:
+its nonces, enrolment records and ledger are in process memory, so a restart loses the enrolment
+records and **silently downgrades an enrolled identity to the weaker no-enrolment mode**. Run
+`PYTHONPATH=. python3 examples/attack.py restart` to watch an impostor, blocked a moment earlier,
+be accepted. Two tests assert this weakness deliberately so that it cannot be forgotten.
+
+Contention has the same shape: the mandate now refuses to destroy an identity on an unauthenticated
+claim, which removed an availability attack, but nothing says who resolves the dispute, on what
+evidence, or in what time. Durable replicated state, an audit trail, a resolution procedure, and
+what a relying party may decide when the mandate is unavailable or lying, are the next body of
+work — and they are operational semantics rather than channel cryptography.
 
 ## Why enrolment breaks the ceiling (the new part)
 

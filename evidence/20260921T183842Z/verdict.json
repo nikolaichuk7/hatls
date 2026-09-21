@@ -1,0 +1,78 @@
+{
+ "impostor_rejected": true,
+ "victim_still_serving": true,
+ "contention_recorded": {
+  "3059301306072a8648ce3d020106082a8648ce3d03010703420004fef95eaf956f98d1f9e4054a7dc989185891235a77d485e99dc589b47269033ff2d33be7324dd5031a050cc9296edca52978fa4d458653258b53669e1109e8e2": [
+   "second instance under one identity"
+  ]
+ },
+ "results": [
+  [
+   "A",
+   0,
+   true,
+   "accepted; continuity intact"
+  ],
+  [
+   "A",
+   1,
+   true,
+   "accepted; continuity intact"
+  ],
+  [
+   "A",
+   2,
+   true,
+   "accepted; continuity intact"
+  ],
+  [
+   "B",
+   0,
+   false,
+   "continuity contention: a second instance claims this identity (no enrolment on record, so the mandate refuses to pick a winner)"
+  ],
+  [
+   "A-after",
+   0,
+   true,
+   "accepted; continuity intact"
+  ]
+ ],
+ "log": [
+  [
+   "accept",
+   "3059301306072a86",
+   "f02f1fdf",
+   "0",
+   "dd92cae137e7"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "f02f1fdf",
+   "1",
+   "dd92cae137e7"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "f02f1fdf",
+   "2",
+   "dd92cae137e7"
+  ],
+  [
+   "contention-anchor",
+   "3059301306072a86",
+   "dd92cae137e7",
+   "15f90cb08862",
+   "0"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "2bb04e67",
+   "0",
+   "dd92cae137e7"
+  ]
+ ]
+}

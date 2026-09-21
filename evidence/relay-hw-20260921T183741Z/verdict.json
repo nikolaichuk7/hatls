@@ -1,0 +1,38 @@
+{
+ "guest": "34.13.254.66",
+ "enrolled": true,
+ "chip": "dd92cae137e7f2cf",
+ "zone": "europe-west4-b",
+ "direct_accepted": true,
+ "relay_accepted": false,
+ "exporters": {
+  "guest_side": "c903cd6742fd8d823906b5b220dcf37f84fefd59e2b1358a6338dfef49b0b3d1",
+  "client_side": "1f7debc3f31749110ba84d6d8962310fe707600d9b0bf94574245a17c8d0f335"
+ },
+ "log": [
+  [
+   "enrolled",
+   "3059301306072a86",
+   "dd92cae137e7"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "d2fbf7df",
+   "0",
+   "dd92cae137e7"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "d2fbf7df",
+   "1",
+   "dd92cae137e7"
+  ],
+  [
+   "declined-linkmismatch",
+   "3059301306072a86",
+   "0"
+  ]
+ ]
+}

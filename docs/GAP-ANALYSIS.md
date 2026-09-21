@@ -65,11 +65,18 @@ open problem.
 
 ## Honest limits before we build
 
-- Continuity closes 3.8.1 by *detection and revocation*, not prevention. The first message under a
-  stolen key still passes; the fork is caught at the first post link. That is the honest ceiling,
-  and it is exactly what 3.8.1 asks for ("a means to reject").
-- On AWS masked VLEK, CHIP_ID is zero, so instance identity is weaker there. The mandate needs a
-  canonical per-instance identifier; which one survives masking is an open measurement.
+- **With enrolment on record**, 3.8.1 is closed by *prevention*: the impostor is refused on its
+  first message and the victim is untouched. **Without enrolment** the mandate cannot tell owner
+  from thief, so the first presenter is accepted and a later second instance is recorded as
+  contention; the incumbent keeps serving and nothing is revoked automatically. Both modes are in
+  `examples/attack.py`. (v0.1 said two different things about this ceiling in two documents dated
+  the same day — see [AUDIT.md](AUDIT.md) finding 7.)
+- **On a platform with no instance anchor the guarantee does not exist**, and HATLS now fails
+  closed instead of appearing to work. Measured on our own archive: 15 AWS shared-tenancy VLEK
+  reports carry `CHIP_ID = 00…00` across six distinct instances, and `MASK_CHIP_KEY` is *clear* in
+  all of them — the platform hides the identifier without setting the flag that says so. Which
+  claim should carry instance identity across SEV-SNP, TDX and Nitro is the open question we would
+  most like the working groups to settle ([AUDIT.md](AUDIT.md) finding 4).
 - Standardising binder + chain + mandate is multi-year. The near-term contribution is a measured
   security-consideration and a reference implementation, not a finished RFC.
 
