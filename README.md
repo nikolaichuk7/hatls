@@ -109,6 +109,30 @@ docs/          design, threat model, gap analysis, hardware results
 evidence/      real attestation verdicts from the hardware runs
 ```
 
+## Performance and correctness (measured)
+
+Numbers reproduce from `examples/` on a mock chip; the beacon cost is from `tools/liveness_probe.py`
+on a real AMD SEV-SNP chip.
+
+| Question a deployer asks | Measured answer |
+|---|---|
+| Does it slow the connection? | one attestation report at setup (~8 ms, once); after that the per-step link is **2.5 microseconds** (~400k/sec) |
+| How fast can the mandate verify? | **~1 ms per check incl. ECDSA verify, ~920 checks/sec per core**, scales with cores |
+| Liveness beacon cost on real silicon | **7.96 ms median**, up to ~125/sec; you emit one per policy interval (e.g. once a second), not per packet |
+| Will it reject legitimate users? | legitimate reconnects from the same chip: **0 false rejects / 500** |
+| Will an impersonation slip through? | stolen key on a different chip: **0 missed / 500** |
+| Does normal in-session traffic break the chain? | **0 false breaks / 500** |
+
+The expensive part of any attested-TLS design is appraising the Evidence itself (seconds); HATLS adds
+nothing to that hot path — the continuity layer is microsecond arithmetic in the background. A user
+does not perceive a speed difference.
+
+**One honest false-positive risk:** if the cloud *live-migrates* a workload to a different physical
+chip, the chip identifier changes and the mandate reads it as a fork. In practice SEV-SNP confidential
+VMs are not live-migrated (the maintenance policy terminates them), so this does not arise there;
+where migration is possible, it is closed by the platform signing a migration statement that the
+mandate accepts. This is an open item, stated rather than hidden.
+
 ## Honest limits
 
 - A research prototype, not an IETF standard. Standardisation is a multi-year process.
