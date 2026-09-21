@@ -5,13 +5,18 @@
 [![Status](https://img.shields.io/badge/status-research%20prototype-orange.svg)](docs/HARDWARE-RESULTS.md)
 [![Hardware](https://img.shields.io/badge/measured%20on-AMD%20SEV--SNP-green.svg)](docs/HARDWARE-RESULTS.md)
 
-**Prove that the confidential machine on the other end of a TLS connection is genuine — and stays
-genuine — for the whole conversation, not just at the start.**
+**Know that the confidential machine answering you is the same enrolled machine it was at the first
+message — and find out within one message when it stops being.**
 
-HATLS unifies the two approaches the IETF SEAT working group is choosing between (attestation
-*inside* the TLS handshake and attestation *after* it) and adds the piece the working group's own
-use-cases document says is needed but leaves unspecified: **continuity to a specific hardware
-instance, with revocation the moment an identity forks.**
+HATLS is a **continuity layer** for attested TLS. A transport binder proves "this session reaches a
+genuine TEE"; HATLS adds what the SEAT working group's own use-cases document asks for and leaves
+unspecified: **continuity to a specific instance, and what happens when an identity forks.**
+
+It is **post-handshake by nature**, and says so. Evidence binds the TLS exporter, which exists only
+after the handshake completes, so every attestation HATLS delivers is a post-handshake one. The
+early binder over the session context is an input to the first link, not a second delivery channel.
+It sits above `draft-fossati-seat-early-attestation` and `draft-fossati-seat-expat` rather than
+competing with either.
 
 > Everything here is measured on real AMD SEV-SNP hardware, not simulated. Reproduce it yourself in
 > two minutes locally, or against your own confidential VM. This is a research prototype, not a
@@ -34,16 +39,20 @@ HATLS narrows the attacker, layer by measured layer:
 
 | The attacker managed to… | HATLS response | Prevent / detect |
 |---|---|---|
-| Copy the key **file** | sealed key opens only on its own chip | prevent |
+| Copy the key **file** | sealing the key to its chip (SEV-SNP derived key) — *designed, not implemented in this repository* | prevent |
 | Extract the **live key**, run it on another chip | enrolment: wrong chip → blocked on the **first message** | prevent |
 | Open an independent session to another party | shared mandate keyed by identity, not connection | prevent |
 | Replay or reorder within a session | continuity chain + counter | detect, same message |
 | Relay a genuine session | exporter binding | detect |
-| Be a **physical insider on the exact chip** | liveness + place; window **measured (~8 ms)**, not assumed | narrowed, quantified |
+| Be a **physical insider on the exact chip** | liveness beacons: the chip can emit one every **7.96 ms**, so that is how finely an interruption can be seen | narrowed, not closed |
 
-The only survivor is an insider physically at the enrolled chip — and even then its attack window is
-a measured number, because the key must be in cleartext on the chip to sign. We do not claim to
-eliminate it; we quantify it.
+The only survivor is an insider physically at the enrolled chip. We do not claim to eliminate it,
+and we are careful about what the 7.96 ms means: it is how fast the chip can produce a fresh
+liveness beacon, which bounds the **resolution of detection**, not the attacker's window. While the
+key is in cleartext in guest memory to sign at all, that window is the life of the process.
+
+There is also a platform where the central guarantee does not hold at all, and it is named up
+front: see *no instance anchor* under [Honest limits](#honest-limits).
 
 ---
 
@@ -52,8 +61,10 @@ eliminate it; we quantify it.
 ```bash
 git clone https://github.com/nikolaichuk7/hatls && cd hatls
 pip install -r requirements.txt
-PYTHONPATH=. python3 examples/run_local.py     # the full cycle on a mock chip
+PYTHONPATH=. python3 examples/run_local.py     # nine scenarios end to end on a mock chip
 PYTHONPATH=. python3 examples/attack.py        # try to break it: 8 attacks, see the verdicts
+PYTHONPATH=. python3 examples/relay_demo.py    # a real TLS relay, with the real stolen key
+PYTHONPATH=. python3 bench/benchmark.py        # reproduce every number in the table below
 ```
 
 `attack.py` prints `STOPPED` for every attack the mandate catches and is honest about the weaker
@@ -90,8 +101,15 @@ distribution service. Delete the VMs when done (the scripts remind you).
   Mandate (a shared, append-only authority over an identity, like a transparency log):
     • enrolment  : the chip signs "this key was born on me"  → wrong chip blocked on first message
     • continuity : each link must chain from the last         → replay / relay / splice caught
-    • chip anchor: same identity must stay on the same chip   → re-hosting caught, key revoked
+    • instance anchor: the identity must stay on its instance  → re-hosting caught, impostor refused
 ```
+
+A rejected presenter never revokes the identity it claims. With enrolment on record the mandate
+knows which instance is legitimate and simply refuses the other one; without it, a second instance
+is recorded as *contention* and the incumbent keeps serving. Revocation is an explicit operator
+act, so a stolen key cannot be turned into a weapon against its owner.
+
+**Every defect found in v0.1, how it was found and what changed:** [docs/AUDIT.md](docs/AUDIT.md).
 
 Full design in [docs/DESIGN.md](docs/DESIGN.md); the layered threat model in
 [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md); why the working group needs this in
@@ -119,9 +137,14 @@ on a real AMD SEV-SNP chip.
 | Does it slow the connection? | one attestation report at setup (~8 ms, once); after that the per-step link is **2.5 microseconds** (~400k/sec) |
 | How fast can the mandate verify? | **~1 ms per check incl. ECDSA verify, ~920 checks/sec per core**, scales with cores |
 | Liveness beacon cost on real silicon | **7.96 ms median**, up to ~125/sec; you emit one per policy interval (e.g. once a second), not per packet |
-| Will it reject legitimate users? | legitimate reconnects from the same chip: **0 false rejects / 500** |
-| Will an impersonation slip through? | stolen key on a different chip: **0 missed / 500** |
+| Will it reject legitimate users? | legitimate reconnects from the enrolled instance: **0 false rejects / 500** |
+| Will an impersonation slip through? | stolen key on a different instance: **0 missed / 500** |
 | Does normal in-session traffic break the chain? | **0 false breaks / 500** |
+| Can one identity hold several connections at once? | 16 parallel connections: **0 false breaks / 496** |
+| Is a relayed exporter ever accepted? | **0 accepted / 500** |
+
+Reproduce all of it with `PYTHONPATH=. python3 bench/benchmark.py` (set `HATLS_BENCH_N` to change
+the trial count). The measured mandate check is **0.78 ms including the ECDSA verify**.
 
 The expensive part of any attested-TLS design is appraising the Evidence itself (seconds); HATLS adds
 nothing to that hot path — the continuity layer is microsecond arithmetic in the background. A user
@@ -136,9 +159,23 @@ mandate accepts. This is an open item, stated rather than hidden.
 ## Honest limits
 
 - A research prototype, not an IETF standard. Standardisation is a multi-year process.
+- **No instance anchor on some platforms.** Re-host detection rests on the SEV-SNP `CHIP_ID`. Under
+  a shared-tenancy VLEK that field is **all zeros**: in our own archive, six distinct AWS instances
+  report the same 64 zero bytes, and the firmware does *not* set `MASK_CHIP_KEY` to say so. On such
+  a platform HATLS **fails closed** rather than pretending, and `require_anchor=False` lets a
+  deployer accept the downgrade knowingly: ordering and relay defence still hold, re-host detection
+  does not. Which claim *should* carry instance identity across SNP, TDX and Nitro is an open
+  question we would like the working groups to settle.
 - Measured on one cloud and one silicon vendor so far. AWS, Azure, and Intel TDX are next.
-- The physical-insider case is narrowed and its window measured, not eliminated — it cannot be,
-  by the nature of any signing key.
+- The physical-insider case is narrowed, not eliminated — it cannot be, by the nature of any
+  signing key. The beacon interval bounds detection resolution, not the attacker's window.
+- Sealing the identity key to its chip is part of the design but is **not implemented here**; the
+  launcher deliberately ships one key to two guests, which is the stolen-key model this repository
+  demonstrates against.
+- No formal model yet. The guarantees here are measured and tested, not machine-proved; a
+  ProVerif/Tamarin treatment of the binder and the mandate is the obvious next step.
+- The early binder runs over a session context both endpoints derive independently, not over the
+  true TLS handshake transcript, which needs a hook into the TLS stack.
 
 ## Relationship to IETF
 

@@ -67,11 +67,16 @@ view is fooled. Two things, and only two, address the key itself:
    fork and revokes. We measured exactly this shape in the product's failover-negatives drill: two
    endpoints presenting one sealed identity -> the second is declined.
 
-So the honest guarantee of "intra + post + mandate" is not "no substitution". It is
-**"no substitution without detection and revocation"**: crypto stops relay and replay outright
-(Windows B, C, D), and the mandate turns the one residual case (Window A, key theft) from silent
-success into a detected fork that costs the attacker the key. That is a real, defensible, and
-new combination -- and it is the honest ceiling, not "perfect security".
+So the honest guarantee of "binder + chain + mandate" is not "no substitution". It is
+**"no substitution without detection, and no silent success"**: the cryptography stops relay and
+replay outright (Windows B, C, D), and the mandate turns the one residual case (Window A, key
+theft) from silent success into either an outright refusal -- when the key was enrolled, so the
+mandate knows which instance is legitimate -- or a recorded contention, when it does not.
+
+What it deliberately does *not* do is revoke on an unauthenticated claim. Automatic revocation on
+fork makes a stolen key a weapon against its owner: anyone presenting it from any genuine chip
+could destroy the victim's identity. Revocation is an operator act taken on recorded evidence.
+That is the honest ceiling, not "perfect security".
 
 ## Why it can be light
 

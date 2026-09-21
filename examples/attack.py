@@ -129,10 +129,15 @@ ATTACKS={"honest":a_honest,"rehost":a_rehost,"replay":a_replay,"relay":a_relay,
 if __name__=="__main__":
     which=sys.argv[1:] or list(ATTACKS)
     print("HATLS attack playground (local, MockTEE). STOPPED = the mandate caught it.\n")
-    stopped=0; total=0
+    stopped=0; total=0; control_ok=True
     for name in which:
         fn=ATTACKS.get(name)
         if not fn: print(f"  unknown attack: {name}"); continue
         r=fn()
-        if name not in ("honest","noenroll"): total+=1; stopped+=1 if r else 0
+        if name=="honest": control_ok=bool(r)
+        elif name!="noenroll": total+=1; stopped+=1 if r else 0
     print(f"\n  attacks stopped: {stopped}/{total}")
+    # exit non-zero so CI fails if an attack gets in or the honest control stops working
+    if not control_ok: print("  CONTROL FAILED: the honest server was rejected"); sys.exit(1)
+    if stopped != total: print(f"  FAILURE: {total-stopped} attack(s) got in"); sys.exit(1)
+    sys.exit(0)

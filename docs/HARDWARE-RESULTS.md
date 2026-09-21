@@ -1,3 +1,17 @@
+> **Historical log — read [AUDIT.md](AUDIT.md) first.**
+>
+> These are the records of runs as they happened, kept unedited because evidence should not be
+> rewritten after the fact. They were produced by v0.1, whose client read the TLS exporter and the
+> identity key out of the peer's own message and whose enrolment never bound the key to the chip.
+>
+> What still stands: the reports are genuine 1184-byte SEV-SNP reports, the chips and the
+> signatures are real, and re-hosting across two distinct chips was genuinely detected.
+> What does not: any relay-resistance implied by these runs, because the client of the day could
+> not have detected a relay; and the revocation of guest A after guest B appeared, which is now
+> understood as an attack on the victim rather than a success.
+>
+> A re-run of the full cycle on live hardware with the corrected code is pending.
+
 # HATLS on real hardware: the full cycle, including re-hosting and revocation
 
 Live run 21 September 2026, run id `20260921T135827Z`. Two genuine AMD SEV-SNP guests on Google
