@@ -2,6 +2,7 @@
 # Launch one SEV-SNP guest running the HATLS probe. The SAME tik files passed to two guests model
 # re-hosting. Usage: ./launch.sh <name> <zone>
 set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 NAME="$1"; ZONE="$2"; PROJ=rats-probe
 # generate the shared TIK once (reused across guests to model a stolen key)
 if [ ! -f tik.key ]; then
@@ -24,7 +25,7 @@ gcloud compute instances create "$NAME" \
   --project="$PROJ" --zone="$ZONE" --machine-type=n2d-standard-2 \
   --confidential-compute-type=SEV_SNP --maintenance-policy=TERMINATE \
   --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
-  --metadata-from-file=startup-script="$STARTUP",tik-key=<(base64 -i tik.key),tik-crt=<(base64 -i tik.crt),probe=<(base64 -i guest_probe.py) \
+  --metadata-from-file=startup-script="$STARTUP",tik-key=<(base64 -i tik.key),tik-crt=<(base64 -i tik.crt),probe=<(base64 -i tools/guest_probe.py) \
   --tags=hatls --quiet
 rm -f "$STARTUP"
 gcloud compute instances describe "$NAME" --zone="$ZONE" --project="$PROJ" \
