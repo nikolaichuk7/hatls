@@ -27,6 +27,7 @@ signed Evidence; `verify_report(evidence, expected_report_data) -> (ok, anchor)`
 """
 import hashlib, hmac, time
 from .store import MemoryStore
+from .transfer import canonical, verify_grant, GRANT_VERSION
 
 # ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
@@ -124,7 +125,8 @@ class Mandate:
 
     # ---- the durable ledger -------------------------------------------------------
     _BLANK = {"enrolled_anchor": None, "observed_anchor": None,
-              "revoked": False, "reason": None, "contention": []}
+              "revoked": False, "reason": None, "contention": [],
+              "transfer_authority": None, "transfers": [], "consumed_grants": []}
 
     def _rec(self, k):
         r = self.store.get(k)
@@ -163,7 +165,9 @@ class Mandate:
     def _emit(self, ev): self.log.append(ev)
 
     def _dispute(self, k, reason):
-        rec = self._rec(k); rec["contention"] = (rec["contention"] + [reason])[-64:]
+        """Record a dispute WITH a timestamp: 'within what bound' is not answerable without one."""
+        rec = self._rec(k)
+        rec["contention"] = (rec["contention"] + [{"at": int(time.time()), "why": reason}])[-64:]
         self._save(k, rec)
 
     # ---- challenge/response: the mandate picks the nonce, and it expires ----
@@ -175,12 +179,16 @@ class Mandate:
         self._challenges[n] = now + self.challenge_ttl
         return n
 
-    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der):
+    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
         """One-time: bind an identity key to the instance it was born on.
 
         Requires (a) a nonce this mandate issued, unspent and unexpired, (b) a CSR that carries
         EXACTLY tik_pub and is self-signed by its private half, (c) a TEE report over
-        SHA-512(nonce || CSR) from a platform with a usable anchor. First write wins."""
+        SHA-512(nonce || CSR) from a platform with a usable anchor. First write wins.
+
+        `transfer_authority` is the SPKI of the key allowed to authorise moving this identity to a
+        different instance later -- see hatls.transfer. Omitting it means the identity can never be
+        moved, which is the safe default and also means a dead machine ends it."""
         k = tik_pub.hex()
         expiry = self._challenges.get(nonce)
         if expiry is None:
@@ -213,9 +221,65 @@ class Mandate:
                            "continuity-to-an-instance cannot be enrolled here")
         del self._challenges[nonce]
         rec["enrolled_anchor"] = anchor.hex()
+        if transfer_authority is not None:
+            rec["transfer_authority"] = transfer_authority.hex()
         self._save(k, rec)
-        self._emit(("enrolled", k[:16], anchor.hex()[:12]))
+        self._emit(("enrolled", k[:16], anchor.hex()[:12],
+                    "transferable" if transfer_authority is not None else "fixed"))
         return True, "enrolled"
+
+    def accept_transfer(self, tik_pub, grant, signature):
+        """Move an enrolled identity to another instance, on the authority named at enrolment.
+
+        The mandate does not decide who is right. It checks that the party the identity itself
+        nominated has said so, recently, once, and about this identity. Returns (accepted, reason).
+        """
+        k = tik_pub.hex()
+        rec = self._rec(k)
+        def no(reason, tag):
+            self._emit(("transfer-rejected", k[:16], tag))
+            return False, reason
+        if rec["revoked"]:
+            return no("identity revoked", "revoked")
+        if rec["enrolled_anchor"] is None:
+            return no("identity is not enrolled; there is nothing to transfer", "not-enrolled")
+        if rec["transfer_authority"] is None:
+            return no("identity named no transfer authority at enrolment and cannot be moved",
+                      "not-transferable")
+        if not isinstance(grant, dict) or grant.get("v") != GRANT_VERSION:
+            return no("unsupported grant version", "bad-version")
+        if grant.get("tik") != k:
+            return no("grant is for a different identity", "wrong-identity")
+        try:
+            verify_grant(bytes.fromhex(rec["transfer_authority"]), grant, signature)
+        except Exception:
+            return no("grant is not signed by this identity's transfer authority", "bad-signature")
+        now = int(time.time())
+        if not (int(grant.get("nbf", 0)) <= now <= int(grant.get("exp", 0))):
+            return no("grant is outside its validity window", "expired")
+        if grant.get("nonce") in rec["consumed_grants"]:
+            return no("grant has already been used", "replayed")
+        if grant.get("from") is not None and grant["from"] != rec["enrolled_anchor"]:
+            return no("grant was issued for a different current instance", "from-mismatch")
+        try:
+            to_anchor = bytes.fromhex(grant["to"])
+        except Exception:
+            return no("grant carries an unreadable destination", "bad-destination")
+        if not any(to_anchor):
+            return no("cannot transfer to a platform with no instance anchor", "no-anchor")
+
+        previous = rec["enrolled_anchor"]
+        rec["enrolled_anchor"] = grant["to"]
+        rec["observed_anchor"] = None
+        rec["transfers"] = (rec["transfers"] + [{"at": now, "from": previous, "to": grant["to"],
+                                                 "nonce": grant["nonce"]}])[-64:]
+        rec["consumed_grants"] = (rec["consumed_grants"] + [grant["nonce"]])[-256:]
+        self._save(k, rec)
+        # the old instance is no longer authorised, so its live chains end here
+        for key in [x for x in self.sessions if x[0] == k]:
+            del self.sessions[key]
+        self._emit(("transferred", k[:16], (previous or "")[:12], grant["to"][:12]))
+        return True, "transferred to the authorised instance"
 
     def revoke(self, tik_pub, reason="operator"):
         """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
