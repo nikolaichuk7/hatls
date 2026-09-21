@@ -1,79 +1,107 @@
 #!/usr/bin/env python3
-"""Full HATLS cycle, locally, MockTEE. Every scenario the hardware run must pass.
+"""The full HATLS cycle, locally, on a MockTEE. Every scenario the hardware run must also pass.
 
-Key model point: the Mandate is a SHARED authority over an identity (like a transparency service),
-so it sees the stolen key even when the attacker connects to a DIFFERENT Relying Party. The chip is
-the non-copyable anchor: an attacker can steal the key AND the chain state, but not the silicon."""
-import os, hashlib
-from hatls.protocol import Attester, Mandate
+Two model points. The mandate is a SHARED authority over an identity, so it sees a stolen key even
+when the attacker opens its session to a DIFFERENT Relying Party. And the instance anchor is the
+part an attacker cannot copy: it can steal the key and the chain state, but not the silicon --
+provided the platform actually exposes an anchor, which scenario 7 shows is not always true.
+
+Run:  PYTHONPATH=. python3 examples/run_local.py
+"""
+import os, hashlib, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+from hatls.protocol import Attester, Mandate, make_enrolment_csr
 from hatls.tee import MockTEE, mock_verifier
 
 CHIP_A = (b"\xa2\xb2\x58\x0a"*16)[:64]
 CHIP_B = (b"\x76\x10\x22\xd0"*16)[:64]
-TIK    = b"victim-TIK-public-key-SPKI-fixed"
+ZERO   = bytes(64)
+
+TIK_PRIV = ec.generate_private_key(ec.SECP256R1())
+TIK = TIK_PRIV.public_key().public_bytes(serialization.Encoding.DER,
+                                         serialization.PublicFormat.SubjectPublicKeyInfo)
+CSR = make_enrolment_csr(TIK_PRIV)          # self-signed: it IS the proof of possession
 
 teeA, teeB = MockTEE(CHIP_A), MockTEE(CHIP_B)
 verify = mock_verifier({teeA.pub.hex(), teeB.pub.hex()})   # both are genuine hardware
 
 def line(ok, why): print(f"   accepted={ok!s:<5}  {why}")
+def sess(): return os.urandom(48), os.urandom(32)          # a fresh (context, exporter) pair
+def enrolled_mandate(tee=teeA, **kw):
+    m=Mandate(verify, **kw); n=m.challenge()
+    ok,why=m.enroll(TIK, tee.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+    assert ok, why
+    return m
 
-print("=== 1. HONEST: one chip, handshake + 2 in-session re-attests ===")
-m=Mandate(verify); a=Attester(teeA,TIK); exp=os.urandom(32); th=os.urandom(48)
-ok,why=m.present(TIK,th,exp,a.attest(th,exp),new_session=True); line(ok,why)
-for _ in range(2):
-    ok,why=m.present(TIK,th,exp,a.attest(th,exp)); line(ok,why)
+print("=== 1. HONEST: one instance, handshake + 2 in-session re-attests ===")
+m=enrolled_mandate(); a=Attester(teeA,TIK); c,e = sess()
+for _ in range(3): line(*m.present(TIK,c,e,a.attest(c,e)))
 
-print("\n=== 2. LEGITIMATE RECONNECT: same chip, brand-new TLS session ===")
-exp2=os.urandom(32); th2=os.urandom(48); a2=Attester(teeA,TIK)
-ok,why=m.present(TIK,th2,exp2,a2.attest(th2,exp2),new_session=True); line(ok,why)
-print("   (same identity, same chip, fresh session -> allowed)")
+print("\n=== 2. LEGITIMATE RECONNECT: same instance, brand-new TLS session ===")
+c2,e2 = sess(); a2=Attester(teeA,TIK)
+line(*m.present(TIK,c2,e2,a2.attest(c2,e2)))
+print("   (same identity, same instance, fresh session -> allowed)")
 
-print("\n=== 3. RELAY: attacker relays; its client session has a different exporter ===")
-m=Mandate(verify); a=Attester(teeA,TIK); expg=os.urandom(32); th=os.urandom(48)
-m.present(TIK,th,expg,a.attest(th,expg),new_session=True)
-expc=os.urandom(32)                                  # the client<->relay exporter differs
-ok,why=m.present(TIK,th,expc,a.attest(th,expg))      # guest signed for expg, client checks expc
-line(ok,why)
+print("\n=== 3. PARALLEL SESSIONS: one identity, two connections at once ===")
+m=enrolled_mandate(); p1,q1 = sess(); p2,q2 = sess()
+x1=Attester(teeA,TIK); x2=Attester(teeA,TIK)
+m.present(TIK,p1,q1,x1.attest(p1,q1)); m.present(TIK,p2,q2,x2.attest(p2,q2))
+print("   connection 1 continues after connection 2 opened:")
+line(*m.present(TIK,p1,q1,x1.attest(p1,q1)))
+print("   (continuity is tracked per connection; the ledger is per identity)")
 
-print("\n=== 4. RE-HOSTING, hardest case: attacker steals the TIK AND the full chain state ===")
-m=Mandate(verify)
-aA=Attester(teeA,TIK); exp=os.urandom(32); th=os.urandom(48)
-ok,why=m.present(TIK,th,exp,aA.attest(th,exp),new_session=True); print("   victim, chip A:"); line(ok,why)
-# attacker imports the key into ITS OWN genuine TEE and opens its own session to a (shared-mandate) RP.
-# It even replays the victim's chain state; only the silicon differs.
-aB=Attester(teeB,TIK); aB.prev=aA.prev; aB.counter=aA.counter
-expX=os.urandom(32); thX=os.urandom(48)
-ok,why=m.present(TIK,thX,expX,aB.attest(thX,expX),new_session=True); print("   attacker, chip B (stole key+state):"); line(ok,why)
-ok,why=m.present(TIK,th,exp,aA.attest(th,exp)); print("   victim tries to continue:"); line(ok,why)
+print("\n=== 4. RELAY: the attacker relays genuine evidence, but its exporter differs ===")
+m=enrolled_mandate(); a=Attester(teeA,TIK); c,eg = sess()
+m.present(TIK,c,eg,a.attest(c,eg))
+ec_ = os.urandom(32)                                 # the client<->relay exporter
+line(*m.present(TIK,c,ec_,a.attest(c,eg)))           # guest signed for eg, verifier derived ec_
+print("   (examples/relay_demo.py does this over real TLS, with a real relay)")
 
-print("\n=== 5. REPLAY: resend an old in-session link ===")
-m=Mandate(verify); a=Attester(teeA,TIK); exp=os.urandom(32); th=os.urandom(48)
-m.present(TIK,th,exp,a.attest(th,exp),new_session=True)
-step=a.attest(th,exp); m.present(TIK,th,exp,step)
-ok,why=m.present(TIK,th,exp,step); print("   resent step:"); line(ok,why)
+print("\n=== 5. RE-HOSTING, hardest case: the key AND the full chain state are stolen ===")
+m=enrolled_mandate()
+aA=Attester(teeA,TIK); c,e = sess()
+print("   victim, instance A:"); line(*m.present(TIK,c,e,aA.attest(c,e)))
+aB=Attester(teeB,TIK); aB.prev=aA.prev; aB.counter=aA.counter   # only the silicon differs
+cX,eX = sess()
+print("   attacker, instance B (stole key + state):"); line(*m.present(TIK,cX,eX,aB.attest(cX,eX)))
+print("   victim carries on, untouched by the impostor:")
+line(*m.present(TIK,c,e,aA.attest(c,e)))
 
-print("\n--- mandate audit log (re-hosting scenario) ---")
-mm=Mandate(verify)
-aA=Attester(teeA,TIK); e=os.urandom(32); t=os.urandom(48)
-mm.present(TIK,t,e,aA.attest(t,e),new_session=True)
-aB=Attester(teeB,TIK); aB.prev=aA.prev; aB.counter=aA.counter
-mm.present(TIK,os.urandom(48),os.urandom(32),aB.attest(os.urandom(48),os.urandom(32)),new_session=True)
-for ev in mm.log: print("   ",ev)
+print("\n=== 6. REPLAY: resend an old in-session link ===")
+m=enrolled_mandate(); a=Attester(teeA,TIK); c,e = sess()
+m.present(TIK,c,e,a.attest(c,e)); step=a.attest(c,e); m.present(TIK,c,e,step)
+print("   resent step:"); line(*m.present(TIK,c,e,step))
 
-print("\n=== 6. ENROLLMENT PREVENTION: mandate knows TIK<->chip BEFORE any attack ===")
-import hashlib as _h
-m=Mandate(verify)
-# enroll the victim key to chip A (TACRA-style: chip signs REPORT_DATA=SHA-512(nonce||csr))
-nonce=os.urandom(32); csr=b"victim-CSR-DER-bytes"
-enroll_rd=_h.sha512(nonce+csr).digest()
-enroll_ev=teeA.report(enroll_rd)                      # chip A signs the enrollment
-ok,why=m.enroll(TIK, enroll_ev, nonce, csr); print(f"   enroll on chip A: {ok} ({why})")
-# NOW the attacker (chip B, stolen key) opens an INDEPENDENT session -- no victim active
-aB=Attester(teeB,TIK); exp=os.urandom(32); th=os.urandom(48)
-ok,why=m.present(TIK, th, exp, aB.attest(th,exp), new_session=True)
-print(f"   attacker chip B, FIRST message, no victim present: accepted={ok}")
+print("\n=== 7. A PLATFORM WITH NO INSTANCE ANCHOR (AWS shared-tenancy VLEK) ===")
+z1, z2 = MockTEE(ZERO), MockTEE(ZERO)                # two DIFFERENT machines, identical zeros
+vz = mock_verifier({z1.pub.hex(), z2.pub.hex()})
+mz = Mandate(vz); n=mz.challenge()
+ok,why = mz.enroll(TIK, z1.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+print(f"   enrol on a masked platform: {ok} ({why})")
+c,e = sess()
+print("   stolen key on the OTHER masked machine:")
+line(*mz.present(TIK,c,e,Attester(z2,TIK).attest(c,e)))
+md = Mandate(vz, require_anchor=False); c,e = sess()
+print("   same platform with the downgrade accepted explicitly:")
+line(*md.present(TIK,c,e,Attester(z2,TIK).attest(c,e)))
+print("   (ordering and relay defence still hold there; re-host detection does not)")
+
+print("\n=== 8. ENROLMENT PREVENTION: the impostor is stopped on its FIRST message ===")
+m=enrolled_mandate()
+c,e = sess()
+ok,why = m.present(TIK, c, e, Attester(teeB,TIK).attest(c,e))
+print(f"   attacker instance B, first message, no victim present: accepted={ok}")
 print(f"     -> {why}")
-# and the legitimate victim on chip A still works
-aA=Attester(teeA,TIK); exp=os.urandom(32); th=os.urandom(48)
-ok,why=m.present(TIK, th, exp, aA.attest(th,exp), new_session=True)
-print(f"   legitimate victim chip A: accepted={ok} ({why})")
+c,e = sess()
+print("   the legitimate victim on its enrolled instance:")
+line(*m.present(TIK, c, e, Attester(teeA,TIK).attest(c,e)))
+
+print("\n=== 9. AN IMPOSTOR CANNOT RE-ENROL SOMEONE ELSE'S IDENTITY ===")
+n=m.challenge()
+ok,why = m.enroll(TIK, teeB.report(hashlib.sha512(n+CSR).digest()), n, CSR)
+print(f"   attacker tries to enrol the victim's PUBLIC key on its own chip: {ok} ({why})")
+
+print("\n--- mandate audit log (scenario 8) ---")
+for ev in m.log: print("   ", ev)

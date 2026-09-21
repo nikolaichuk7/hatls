@@ -100,7 +100,8 @@ class Mandate:
     def __init__(self, verify_report, require_anchor=True):
         self.verify_report = verify_report
         self.require_anchor = require_anchor
-        self.state = {}        # tik_pub_hex -> {"anchor":.., "prev":.., "counter":.., "revoked":bool}
+        self.identity = {}     # tik_pub_hex -> {"anchor":.., "revoked":bool}      the ledger
+        self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  the chains
         self.enrolled = {}     # tik_pub_hex -> anchor   (which instance this key was born on)
         self.contention = {}   # tik_pub_hex -> [reasons]  (evidence of a dispute, not a verdict)
         self._challenges = set()
@@ -151,25 +152,30 @@ class Mandate:
     def revoke(self, tik_pub, reason="operator"):
         """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
         k = tik_pub.hex()
-        st = self.state.setdefault(k, {"anchor":None,"prev":None,"counter":-1,"revoked":False})
-        st["revoked"] = True
+        self.identity.setdefault(k, {"anchor": None, "revoked": False})["revoked"] = True
         self._emit(("revoked", k[:16], reason))
         return True, f"identity revoked: {reason}"
 
     def _dispute(self, k, reason):
         self.contention.setdefault(k, []).append(reason)
 
-    def present(self, tik_pub, transcript_hash, exporter, msg, new_session=False):
+    def present(self, tik_pub, session_context, exporter, msg):
         """Appraise one attestation step.
 
-        `exporter` MUST be derived by the Relying Party from ITS OWN side of the TLS session.
-        A value copied out of the peer's message proves nothing and defeats relay detection; see
-        hatls.client, which derives it for you.
+        `session_context` and `exporter` MUST both be derived by the Relying Party from ITS OWN
+        side of the TLS session (see hatls.client). Values copied out of the peer's message prove
+        nothing: a relay forwards them unchanged.
+
+        There is no `new_session` flag. Which chain a step belongs to is DERIVED from the session
+        context, so the caller cannot assert its way past the counter. Continuity is tracked per
+        connection, which is what lets one identity hold several sessions at once; the identity
+        ledger -- anchor, enrolment, revocation -- is shared across all of them.
 
         Returns (accepted, reason). A rejected presenter never revokes the identity it claims."""
         k = tik_pub.hex()
-        st = self.state.get(k)
-        if st and st["revoked"]:
+        skey = hashlib.sha256(session_context).hexdigest()[:32]
+        ident = self.identity.get(k)
+        if ident and ident["revoked"]:
             self._emit(("declined-revoked", k[:16], msg["counter"]))
             return False, "identity revoked"
 
@@ -190,8 +196,8 @@ class Mandate:
                                "undecidable here (set require_anchor=False to accept that)")
             self._emit(("anchor-absent-downgraded", k[:16], msg["counter"]))
 
-        # 1b) ENROLMENT GATE. If this identity was enrolled, Evidence from any other instance is an
-        #     impostor -- rejected on its FIRST message. We know which instance is legitimate, so we
+        # 1b) ENROLMENT GATE. Evidence from any instance other than the enrolled one is an
+        #     impostor, rejected on its FIRST message. We know which instance is legitimate, so we
         #     reject the PRESENTER and leave the victim's identity untouched.
         enrolled_anchor = self.enrolled.get(k)
         if enrolled_anchor is not None and anchor is not None and anchor != enrolled_anchor:
@@ -199,28 +205,37 @@ class Mandate:
             self._emit(("rejected-impostor", k[:16], enrolled_anchor.hex()[:12], anchor.hex()[:12], msg["counter"]))
             return False, "rejected: key presented from an instance it was not enrolled on"
 
-        # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent chain
-        #    and record a dispute. We do NOT destroy the identity on an unauthenticated claim.
-        if st and anchor is not None and st["anchor"] is not None and anchor != st["anchor"]:
+        # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent and
+        #    record a dispute. We do NOT destroy the identity on an unauthenticated claim.
+        if ident and anchor is not None and ident["anchor"] is not None and anchor != ident["anchor"]:
             self._dispute(k, "second instance under one identity")
-            self._emit(("contention-anchor", k[:16], st["anchor"].hex()[:12], anchor.hex()[:12], msg["counter"]))
+            self._emit(("contention-anchor", k[:16], ident["anchor"].hex()[:12], anchor.hex()[:12], msg["counter"]))
             return False, ("continuity contention: a second instance claims this identity "
                            "(no enrolment on record, so the mandate refuses to pick a winner)")
 
-        # 3) recompute the post_link ourselves
-        il = intra_link(transcript_hash, tik_pub)
-        base = il if (new_session or st is None) else st["prev"]
+        # 3) the chain of THIS connection. A session we have not seen must start at counter 0; one
+        #    we have seen must advance by exactly one.
+        sess = self.sessions.get((k, skey))
+        if sess is None:
+            if msg["counter"] != 0:
+                self._emit(("declined-counter", k[:16], "new session", msg["counter"]))
+                return False, "a session's first link must be counter 0"
+            base = intra_link(session_context, tik_pub)
+        else:
+            if msg["counter"] != sess["counter"] + 1:
+                self._dispute(k, "counter did not advance")
+                self._emit(("declined-counter", k[:16], sess["counter"], msg["counter"]))
+                return False, "counter did not advance by one (replay or reorder)"
+            base = sess["prev"]
+
+        # 4) recompute the link ourselves from values we derived, not values we were handed
         if post_link(exporter, base, msg["counter"]) != pl:
             self._dispute(k, "link does not chain")
             self._emit(("declined-linkmismatch", k[:16], msg["counter"]))
             return False, "link does not chain (relay, replay or a foreign session)"
 
-        # 4) within a session the counter advances by exactly one
-        if st and not new_session and msg["counter"] != st["counter"] + 1:
-            self._dispute(k, "counter did not advance")
-            self._emit(("declined-counter", k[:16], st["counter"], msg["counter"]))
-            return False, "counter did not advance by one (replay or reorder)"
-
-        self.state[k] = {"anchor": anchor, "prev": pl, "counter": msg["counter"], "revoked": False}
-        self._emit(("accept", k[:16], msg["counter"], (anchor or b"").hex()[:12], "new" if new_session else "cont"))
+        self.sessions[(k, skey)] = {"prev": pl, "counter": msg["counter"]}
+        self.identity[k] = {"anchor": anchor if anchor is not None else (ident or {}).get("anchor"),
+                            "revoked": False}
+        self._emit(("accept", k[:16], skey[:8], msg["counter"], (anchor or b"").hex()[:12]))
         return True, "accepted; continuity intact"

@@ -115,11 +115,10 @@ def relay(key_pem, cert_pem, ready):
     finally:
         s.close(); srv.close()
 
-def feed(m, cl, blob, label, new_session=True):
+def feed(m, cl, blob, label):
     ok=None
     for step in blob["chain"]:
-        ok,why=m.present(cl.peer_identity_key, cl.session_context, cl.exporter, step,
-                         new_session=new_session and step["counter"]==0)
+        ok,why=m.present(cl.peer_identity_key, cl.session_context, cl.exporter, step)
         print(f"   {label} counter {step['counter']}: accepted={ok}  {why}")
         if not ok: break
     return ok

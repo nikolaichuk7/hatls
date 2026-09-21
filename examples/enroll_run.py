@@ -42,7 +42,7 @@ def main():
         msg = {"counter": 0, "post_link": step["post_link"],
                "evidence": {"kind": "sev-snp", "report": step["report"],
                             "report_data": report_data_for(bytes.fromhex(step["post_link"])).hex()}}
-        okB, whyB = m.present(tik, cl.session_context, cl.exporter, msg, new_session=True)
+        okB, whyB = m.present(tik, cl.session_context, cl.exporter, msg)
         print(f"   guest B zone {blob['zone']}, FIRST message, no victim active: accepted={okB}")
         print(f"     -> {whyB}")
 
@@ -53,7 +53,7 @@ def main():
         msg = {"counter": 0, "post_link": step["post_link"],
                "evidence": {"kind": "sev-snp", "report": step["report"],
                             "report_data": report_data_for(bytes.fromhex(step["post_link"])).hex()}}
-        okA, whyA = m.present(cl.peer_identity_key, cl.session_context, cl.exporter, msg, new_session=True)
+        okA, whyA = m.present(cl.peer_identity_key, cl.session_context, cl.exporter, msg)
         print(f"   victim chip A: accepted={okA} ({whyA})")
 
     print("\n--- mandate log ---")
