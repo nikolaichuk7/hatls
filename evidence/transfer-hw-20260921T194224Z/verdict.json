@@ -1,0 +1,52 @@
+{
+ "enrolled": true,
+ "instance_a": "d75823da742057fb7a8e93665368d7f3621c7e8362ca0388a53805516eb7efd0",
+ "place_a": "48d22d19657beb39",
+ "instance_b": "1f59783aa5b0be8a524a265bc8dd0c8b6c06d2d00ce02e665863fc1a3d5466c8",
+ "place_b": "a775177c63f1d342",
+ "b_refused_before": true,
+ "transferred": true,
+ "b_accepted_after": true,
+ "a_refused_after": true,
+ "replay_refused": true,
+ "log": [
+  [
+   "enrolled",
+   "3059301306072a86",
+   "d75823da7420",
+   "transferable"
+  ],
+  [
+   "rejected-impostor",
+   "3059301306072a86",
+   "d75823da7420",
+   "1f59783aa5b0",
+   "0"
+  ],
+  [
+   "transferred",
+   "3059301306072a86",
+   "d75823da7420",
+   "1f59783aa5b0"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "95e43a61",
+   "0",
+   "1f59783aa5b0"
+  ],
+  [
+   "rejected-impostor",
+   "3059301306072a86",
+   "1f59783aa5b0",
+   "d75823da7420",
+   "0"
+  ],
+  [
+   "transfer-rejected",
+   "3059301306072a86",
+   "replayed"
+  ]
+ ]
+}

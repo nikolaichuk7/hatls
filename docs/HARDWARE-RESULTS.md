@@ -1,5 +1,5 @@
-> **Read [AUDIT.md](AUDIT.md) first.** The run immediately below is the current one, made with the
-> corrected code on 21 Sep 2026. **Everything after it is a historical record of earlier runs,**
+> **Read [AUDIT.md](AUDIT.md) first.** The run immediately below is the current one, made on
+> 21 Sep 2026 with identity anchored on the instance claim. **Everything after it is a historical record of earlier runs,**
 > kept unedited because evidence should not be rewritten after the fact.
 >
 > Those earlier runs were produced by v0.1, whose client read the TLS exporter and the identity key
@@ -8,6 +8,67 @@
 > two distinct chips was genuinely detected. What does not: any relay resistance they seem to
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
+
+# Run of 21 September 2026, 19:42 UTC — identity anchored on the instance claim
+
+Two AMD SEV-SNP confidential VMs on GCP sharing one TLS identity key. Both deleted afterwards;
+`gcloud compute instances list` returns nothing. Evidence:
+`evidence/transfer-hw-20260921T194224Z/`, `evidence/enroll-20260921T194237Z/`,
+`evidence/relay-hw-20260921T194244Z/` — 13 genuine 1184-byte reports.
+
+This run is the first on the corrected anchor. The two claims are visibly different values:
+
+| guest | zone | **instance** (`REPORT_ID`) | place (`CHIP_ID`) |
+|---|---|---|---|
+| A | `europe-west4-b` | `d75823da742057fb` | `48d22d19657beb39` |
+| B | `europe-west4-a` | `1f59783aa5b0be8a` | `a775177c63f1d342` |
+
+The mandate anchors on the instance. The chip is recorded as place and is not identity — which is
+what lets the same design work on a platform whose `CHIP_ID` is masked away, and what lets two
+guests on one socket be told apart at all.
+
+## 1. Owner-authorised transfer, end to end on real silicon
+
+`examples/transfer_hw.py`. The sequence the mandate requires, with nothing simulated:
+
+```
+1. enrolled on instance d75823da7420, owner key named as transfer authority
+2. instance 1f59783aa5b0 presents the same identity key
+     -> rejected: key presented from an instance it was not enrolled on
+     -> and WITNESSED: the evidence was valid, so the mandate now knows that instance exists
+3. the owner issues a grant: from d75823da7420 -> to 1f59783aa5b0, single use, 300s window
+     -> accepted: transferred to the authorised instance
+4. instance 1f59783aa5b0 : accepted; continuity intact
+   instance d75823da7420 : rejected, it no longer holds the identity
+   the same grant again   : grant has already been used
+```
+
+A dispute between two genuine instances is settled by the party the identity nominated, not by the
+mandate guessing. This also gives a dead machine a way back: step 2 is what recovery looks like,
+and the grant is the owner saying it was meant.
+
+## 2. Enrolment prevention on the instance anchor
+
+`examples/enroll_run.py`. Guest B, same key, different instance, refused on its FIRST message; the
+victim keeps serving. Identical to the earlier run in outcome, but now the refusal is on the claim
+that actually identifies the Target Environment.
+
+## 3. Relay with a real stolen key
+
+`examples/relay_hw.py`. Unchanged and still holds: direct accepted, relayed rejected at counter 0,
+guest-side exporter `fa1b273292e215fc` against client-side `3c2f6cd314c74172`.
+
+## What this run does and does not show
+
+It shows, on live silicon: identity anchored on the instance claim, an impostor refused on its
+first message, an owner-authorised transfer with its replay refused, and relay resistance against a
+genuinely stolen key.
+
+It does not show: a masked-`CHIP_ID` platform, because both GCP guests expose one — the AWS case is
+established from the archived corpus and from the specification, not from this run; TDX or Nitro;
+a migration agent, absent from every report we hold; or the physical-insider case.
+
+---
 
 # Run of 21 September 2026, corrected code (`audit/p0-hardening`)
 
