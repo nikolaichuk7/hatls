@@ -9,6 +9,45 @@
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
 
+# Run of 21 September 2026, 19:54 UTC — the chip as a witness to the mandate's ledger
+
+`examples/witness_hw.py`, one SEV-SNP guest in `europe-west4-b`, instance `a41b810b4e16c826`,
+deleted after the run. Evidence: `evidence/witness-hw-20260921T195447Z/`.
+
+A log makes the mandate's decisions non-repudiable, but the head of that log is still the mandate's
+own word: it can sign two well-formed histories. Here the verifier hands the attester its current
+ledger head, the guest binds it into `REPORT_DATA`, and AMD's key signs across it.
+
+```
+ledger size 1, head 0ec05af4c852973dca6fb5fa
+  accepted; continuity intact
+  receipt verifies against the mandate's key: True
+
+what an auditor can check, holding only the report:
+  REPORT_DATA the chip signed : 808822478097306feedd69121a46fa3d
+  recomputed from link + head : 808822478097306feedd69121a46fa3d
+  the claimed head is the one AMD signed across : True
+  any other head would also match               : False
+
+and afterwards:
+  the mandate still accounts for the witnessed head : True
+  after rewriting its log, it accounts for it       : False
+```
+
+Re-checked offline from the archived files alone: the report is a genuine 1184-byte SEV-SNP report,
+its `REPORT_DATA` equals `SHA-512("HATLS-continuity-v1" || post_link || head)` and **not** the v0
+binder, and the receipt verifies against the mandate's public key with no access to the mandate.
+
+The point is the ownership of the signing key. The mandate cannot mint a report saying it claimed a
+different ledger state, because the key is the chip's. The party being audited cannot forge its own
+witness.
+
+What this does not do: it does not prevent equivocation, it makes it evidential. It also says
+nothing about a mandate that never issues a head, and nothing yet about how two mandates serving
+one identity stay consistent.
+
+---
+
 # Run of 21 September 2026, 19:42 UTC — identity anchored on the instance claim
 
 Two AMD SEV-SNP confidential VMs on GCP sharing one TLS identity key. Both deleted afterwards;
