@@ -1,0 +1,32 @@
+### proverif version
+Proverif 2.05. Cryptographic protocol verifier, by Bruno Blanchet, Vincent Cheval, and Marc Sylvestre
+### hatls.pv
+
+--------------------------------------------------------------
+Verification summary:
+
+Query event(Accepted(t,i,e_3)) ==> event(Attested(t,i,e_3)) is true.
+
+Query event(Accepted(t,i,e_3)) ==> event(Enrolled(t,i)) is true.
+
+Query event(AcceptedInSession(t,sc_3)) ==> event(AttestedInSession(t,sc_3)) is true.
+
+Query not event(Reachable) is false.
+
+--------------------------------------------------------------
+
+### hatls-relay-defect.pv
+
+--------------------------------------------------------------
+Verification summary:
+
+Query event(Accepted(t,i,e_3)) ==> event(Attested(t,i,e_3)) is true.
+
+Query event(Accepted(t,i,e_3)) ==> event(Enrolled(t,i)) is true.
+
+Query event(AcceptedInSession(t,sc_3)) ==> event(AttestedInSession(t,sc_3)) is false.
+
+Query not event(Reachable) is false.
+
+--------------------------------------------------------------
+

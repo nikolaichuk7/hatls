@@ -236,8 +236,15 @@ mandate accepts. This is an open item, stated rather than hidden.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
   launcher deliberately ships one key to two guests, which is the stolen-key model this repository
   demonstrates against.
-- No formal model yet. The guarantees here are measured and tested, not machine-proved; a
-  ProVerif/Tamarin treatment of the binder and the mandate is the obvious next step.
+- **The binder and the mandate are machine-proved; the rest is not.** ProVerif 2.05 proves, against
+  a Dolev-Yao attacker with the identity key handed to it in the clear and unboundedly many
+  parallel sessions, that anything the mandate accepts was attested by that instance for the
+  exporter the mandate derived itself, by the instance it enrolled, and under the session it was
+  produced for — and that the honest run is still reachable, so none of it holds vacuously. The
+  same model with the v0.1 defect put back is included, and ProVerif finds the relay in it: that
+  is the check that the model is sensitive to the property rather than agreeable about everything.
+  See [formal/](formal/). **Not** covered: TLS itself, the transfer grant, revocation, the ledger
+  and its receipts, and the hardware-witnessed head.
 - The early binder runs over a session context both endpoints derive independently, not over the
   true TLS handshake transcript, which needs a hook into the TLS stack.
 

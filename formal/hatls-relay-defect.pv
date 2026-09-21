@@ -1,0 +1,114 @@
+(*
+  THE SAME MODEL, WITH THE v0.1 DEFECT PUT BACK.
+
+  A proof is worth exactly what its model is worth. If the model were insensitive to the property
+  -- mis-stated events, an attacker too weak, a mandate that cannot be reached -- every query would
+  come back "true" and mean nothing.
+
+  So this file is hatls.pv with one change: the mandate takes the exporter and the session context
+  from the peer's message instead of deriving them from its own TLS session, which is exactly what
+  the shipped client did before the 21 Sep 2026 audit, and the attester publishes them, which is
+  exactly what the guest probe did. Everything else is identical. ProVerif should find the relay.
+
+  HATLS continuity binder + mandate, in the applied pi calculus.
+
+  The review asked for a formal model of the binder and the mandate, naming the properties it
+  wanted covered: relay, re-hosting, the enrolment race, and parallel sessions. Tests show that
+  the attacks we thought of are stopped; they say nothing about the ones we did not. This says
+  something about all of them, inside the model.
+
+  WHAT IS ASSUMED, stated up front because a proof is only as honest as its assumptions:
+
+    * The attacker is Dolev-Yao: it controls the network completely, and reads, drops, reorders
+      and injects at will.
+    * The identity key TIK is PUBLIC. We hand it to the attacker in the clear, because "the key
+      was stolen" is the premise of the whole design, not a corner case.
+    * A TEE instance is modelled as a signing key the attacker does not have. That is the one
+      thing we assume the hardware gives us: only instance I can produce evidence naming I.
+    * The TLS exporter is modelled as a fresh secret shared by exactly the two endpoints of one
+      session. This is what RFC 8446 gives and what the relay cannot forge; modelling TLS itself
+      is out of scope.
+
+  WHAT IS NOT MODELLED: the transfer grant, revocation, the ledger and its receipts, and the
+  hardware-witnessed head. Those are authorisation and accountability, not the binder.
+*)
+
+free net: channel.
+
+type tee_key.      (* the TEE's attestation key: one per instance *)
+type sess.         (* a TLS session *)
+
+(* ---- primitives ---- *)
+fun tee_pk(tee_key): bitstring.
+fun report(bitstring, tee_key): bitstring.                  (* evidence over report_data *)
+reduc forall d: bitstring, k: tee_key;
+      open_report(report(d, k), tee_pk(k)) = d.             (* verification, by the instance key *)
+
+fun h1(bitstring): bitstring.                               (* SHA-512 over the binder label *)
+fun kdf(bitstring, bitstring, bitstring): bitstring.        (* HKDF-Expand-Label *)
+
+(* exporter and session context: two independent values derived from one TLS session, known to
+   its two endpoints and to nobody else *)
+fun exporter(sess): bitstring [private].
+fun sctx(sess): bitstring [private].
+
+(* ---- events ---- *)
+event Enrolled(bitstring, bitstring).            (* tik, instance *)
+event Attested(bitstring, bitstring, bitstring). (* tik, instance, exporter used by the attester *)
+event Accepted(bitstring, bitstring, bitstring). (* tik, instance, exporter used by the mandate *)
+event AcceptedInSession(bitstring, bitstring).   (* tik, session context the mandate used *)
+event AttestedInSession(bitstring, bitstring).
+event Reachable().
+
+(* ---- the attester, inside instance `ipk` with attestation key `ik` ---- *)
+let Attester(tik: bitstring, ik: tee_key, s: sess) =
+    let e  = exporter(s) in
+    let sc = sctx(s) in
+    let il = kdf(sc, tik, tik) in                       (* intra_link: the first link of the chain *)
+    let pl = kdf(e, il, tik) in                         (* post_link over THIS session's exporter *)
+    event Attested(tik, tee_pk(ik), e);
+    event AttestedInSession(tik, sc);
+    out(net, (pl, report(h1(pl), ik), e, sc)).      (* v0.1 sent these on the wire *)
+
+(* ---- the mandate: derives its own values, never takes them from the peer ---- *)
+let Mandate(tik: bitstring, enrolled_ipk: bitstring, s: sess) =
+    in(net, (pl: bitstring, ev: bitstring, e: bitstring, sc: bitstring));   (* TAKEN FROM THE WIRE *)
+    let il = kdf(sc, tik, tik) in
+    if pl = kdf(e, il, tik) then
+    if open_report(ev, enrolled_ipk) = h1(pl) then
+    event Accepted(tik, enrolled_ipk, e);
+    event AcceptedInSession(tik, sctx(s));      (* the mandate is nonetheless in ITS OWN session *)
+    event Reachable().
+
+(* ---- what we are asking the prover ----
+   1. relay AND re-hosting in one: anything the mandate accepts was attested by that instance
+      for the SAME exporter the mandate derived itself.
+   2. the accepting instance is the enrolled one.
+   3. session separation: a step accepted under one session context was produced under it.
+   4. reachability: the honest run is possible, so 1-3 are not true merely by being unusable. *)
+query t: bitstring, i: bitstring, e: bitstring;
+      event(Accepted(t, i, e)) ==> event(Attested(t, i, e)).
+
+query t: bitstring, i: bitstring, e: bitstring;
+      event(Accepted(t, i, e)) ==> event(Enrolled(t, i)).
+
+query t: bitstring, sc: bitstring;
+      event(AcceptedInSession(t, sc)) ==> event(AttestedInSession(t, sc)).
+
+query event(Reachable()).
+
+(* ---- the world ---- *)
+process
+    new tik_seed: bitstring;
+    let tik = h1(tik_seed) in
+    out(net, tik);                                      (* THE IDENTITY KEY IS STOLEN, by assumption *)
+
+    new ik_good: tee_key;                               (* the enrolled instance *)
+    new ik_evil: tee_key;                               (* a genuine, but different, instance *)
+    out(net, tee_pk(ik_good)); out(net, tee_pk(ik_evil));
+    event Enrolled(tik, tee_pk(ik_good));
+
+    (* unboundedly many parallel sessions, each with its own exporter and context;
+       the attacker may drive the attester on any of them *)
+    ( ! new s: sess; ( Attester(tik, ik_good, s) | Mandate(tik, tee_pk(ik_good), s) ) )
+  | ( ! new s: sess; Attester(tik, ik_evil, s) )        (* the thief attests on its own instance *)

@@ -8,7 +8,7 @@ Three real TLS 1.3 endpoints on localhost:
 
 The relay is the strongest key-theft attacker in the threat model: it terminates the client's TLS
 with the genuine key and forwards the guest's genuine, hardware-signed evidence untouched. Nothing
-it sends is forged. It is caught for one reason only -- the verifier derives the RFC 9266 exporter
+it sends is forged. It is caught for one reason only -- the verifier derives the exporter
 from ITS OWN side of the connection, and the relay cannot make two different TLS sessions agree.
 
 v0.1 of this repository read that exporter out of the peer's JSON, so this attack succeeded. Run

@@ -88,3 +88,21 @@ Next hardware run: enrolment prevention on live chips (guest A enrols; guest B, 
 first message), then the full six-layer transcript across clouds.
 
 Serhii Nikolaichuk / The Capital Index, Austin, Texas
+
+
+## What a machine has checked, and what it has not
+
+`formal/hatls.pv` states the binder and the mandate in the applied pi calculus and ProVerif 2.05
+proves three things about them: that anything the mandate accepts was attested by that instance for
+the exporter the mandate derived itself, that the accepting instance is the enrolled one, and that
+a step accepted under one session context was produced under it. The attacker is Dolev-Yao, the
+identity key is handed to it in the clear, and sessions are unbounded. A fourth query checks the
+honest run is still reachable, because a protocol nobody can complete satisfies everything.
+
+`formal/hatls-relay-defect.pv` is the same model with the v0.1 defect restored -- the mandate
+taking the exporter off the wire -- and ProVerif finds the relay. Two of the three queries stay
+true there, which is the shape of the real defect: a relay forwards genuine evidence from the
+genuine enrolled chip, so only the binding to *this* session breaks.
+
+Outside that model, and so not proved by it: TLS itself, the transfer grant, revocation, the ledger
+and its receipts, and the hardware-witnessed head. Those rest on the arguments above and on tests.

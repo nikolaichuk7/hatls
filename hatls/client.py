@@ -19,7 +19,10 @@ from OpenSSL import SSL, crypto
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
-EXPORTER_LABEL = b"EXPORTER-Channel-Binding"                  # RFC 9266
+# NOT RFC 9266's "EXPORTER-Channel-Binding". That label means tls-exporter channel binding, and
+# borrowing it for a different purpose invites exactly the collision exporters exist to prevent.
+# These are ours, unregistered, and named so that nobody mistakes them for something standard.
+EXPORTER_LABEL = b"EXPERIMENTAL-hatls-continuity-exporter"
 CONTEXT_LABEL  = b"EXPERIMENTAL-hatls-session-context"
 
 class HatlsClient:
@@ -51,7 +54,8 @@ class HatlsClient:
     # ---- values derived locally; never accepted from the peer ----
     @property
     def exporter(self):
-        """RFC 9266 exporter of THIS connection. In a relay it differs from the guest's."""
+        """An RFC 8446 exporter of THIS connection, under our own label. In a relay it differs
+        from the guest's, which is the whole point."""
         return self.conn.export_keying_material(EXPORTER_LABEL, 32, b"")
 
     @property

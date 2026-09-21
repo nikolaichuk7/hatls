@@ -202,7 +202,10 @@ succeeds on three distinct live chips; a single flipped `MEASUREMENT` byte is re
 
 ## Still open
 
-- No formal model. The guarantees are measured and tested, not machine-proved.
+- The binder and the mandate are now machine-proved in ProVerif (see `formal/`), including a
+  deliberately broken copy in which the prover finds the v0.1 relay — the check that the model is
+  sensitive rather than agreeable. TLS itself, grants, revocation, the ledger and the witnessed
+  head are outside that model.
 - The early binder runs over a session context both endpoints derive independently, not over the
   true handshake transcript, which needs a TLS stack hook.
 - Instance identity beyond `CHIP_ID`, across SEV-SNP / TDX / Nitro (see finding 4).
