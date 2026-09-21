@@ -1,0 +1,28 @@
+{
+ "differ": [
+  "REPORTMACSTRUCT.teeinfohash",
+  "REPORTMACSTRUCT.mac",
+  "TDINFO.MROWNER"
+ ],
+ "candidates": [
+  "TDINFO.MROWNER"
+ ],
+ "same": [
+  "REPORTMACSTRUCT.reporttype",
+  "REPORTMACSTRUCT.cpusvn",
+  "REPORTMACSTRUCT.tcbinfohash",
+  "REPORTMACSTRUCT.reportdata",
+  "TEE_TCB_INFO",
+  "TDINFO.attributes",
+  "TDINFO.xfam",
+  "TDINFO.MRTD",
+  "TDINFO.MRCONFIGID",
+  "TDINFO.MROWNERCONFIG",
+  "TDINFO.RTMR0",
+  "TDINFO.RTMR1",
+  "TDINFO.RTMR2",
+  "TDINFO.RTMR3",
+  "TDINFO.SERVTD_HASH",
+  "TDINFO.tail"
+ ]
+}
