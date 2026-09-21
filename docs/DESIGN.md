@@ -36,8 +36,16 @@ public and early, the exporter is secret and late (Fossati Appendix B says this 
 Define a continuity link computed the instant the handshake finishes and again at each
 re-attestation:
 
-    intra_link = HKDF(transcript_checkpoint, server_key)          # Camp 1 value, available at t1
-    link_n     = HKDF(exporter_n, intra_link || counter_n)        # Camp 2 secret + chain + order
+    intra_link = HKDF(transcript_checkpoint, server_key)          # design intent: a t1 value
+    link_n     = HKDF(exporter_n, intra_link || counter_n)        # shared secret + chain + order
+
+> **What the implementation actually does, which is not this.** In this repository `intra_link` is
+> computed over a *session context* that both endpoints derive from the completed TLS 1.3 key
+> schedule, not over the handshake transcript at t1. It therefore lives after t2, exactly like the
+> post links. Calling it a Camp 1 / early-attestation value would be wrong: it is HKDF over a
+> zero secret with an `EXPERIMENTAL-` label, and it delivers no Evidence inside the handshake.
+> Binding the true transcript needs a hook into the TLS stack and is an open item. Everything
+> HATLS *demonstrates* is post-handshake.
 
 On the real 11 Sep run:
 

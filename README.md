@@ -89,14 +89,20 @@ distribution service. Delete the VMs when done (the scripts remind you).
 ## How it works
 
 ```
-  handshake            after handshake              continuously
-  ─────────            ───────────────              ────────────
-  intra_link     ─►    post_link_0        ─►        post_link_1  ─►  ...
-  = f(transcript,      = f(exporter,                = f(exporter,
-      identity key)        prev, counter=0)             prev, counter=1)
-      │                     │                            │
-      │  public, early      │  shared secret, ordered    │  each bound to the chip by a
-      └─── Camp 1 ──────────┴─── Camp 2 ─────────────────┘   real hardware attestation report
+  after the handshake completes                        continuously
+  ─────────────────────────────                        ────────────
+  intra_link       ─►   post_link_0          ─►        post_link_1  ─►  ...
+  = f(session ctx,      = f(exporter,                  = f(exporter,
+      identity key)         prev, counter=0)               prev, counter=1)
+      │                      │                             │
+      │ a binder both ends   │ shared secret, ordered      │ each link is carried in a
+      │ derive independently │                             │ real hardware attestation report
+      └──────────────────────┴─────────────────────────────┘
+
+  This is NOT early attestation. Every value above lives after the handshake: the session
+  context and the exporter both come out of the completed TLS 1.3 key schedule.
+  draft-fossati-seat-early-attestation delivers Evidence *inside* the handshake. HATLS does
+  not, and does not claim to. `intra_link` is the first link of the chain, nothing more.
 
   Mandate (a shared authority over an identity -- in this prototype an in-process store,
   NOT an append-only log: no receipts, no Merkle tree, no independent auditor):
@@ -160,6 +166,21 @@ mandate accepts. This is an open item, stated rather than hidden.
 ## Honest limits
 
 - A research prototype, not an IETF standard. Standardisation is a multi-year process.
+- **The identity is proved by possession, not by a CA.** With no `ca_file` the client runs
+  `VERIFY_NONE`, and that is deliberate: TLS 1.3 CertificateVerify already proves the peer holds
+  the private half of the certificate it presented, and whether *that* key is legitimate is the
+  mandate's answer, not a CA's. So HATLS **does not validate a certificate chain** unless you pass
+  `ca_file`, and nothing here should be read as "we check the certificate" in the PKI sense.
+- **The anchor answers "same silicon", not "same instance".** Two guests on one socket share a
+  `CHIP_ID`, so re-hosting between VMs on one physical machine is invisible; a guest migrated to
+  another socket reads as a fork. That is the ceiling of the claim we chose, not a bug we can
+  patch — see the open question below.
+- **The mandate is in-process and does not survive a restart.** `challenge()` nonces, the enrolment
+  records and the ledger all live in memory. A restart invalidates outstanding nonces and, worse,
+  **loses the enrolment records — which silently downgrades an enrolled identity to the weaker
+  no-enrolment mode**. `examples/attack.py restart` demonstrates it. Durable, replicated mandate
+  state with a resolution procedure for contention is the next significant piece of work, and it is
+  operational semantics rather than channel cryptography.
 - **No instance anchor on some platforms.** Re-host detection rests on the SEV-SNP `CHIP_ID`. Under
   a shared-tenancy VLEK that field is **all zeros**: in our own archive, six distinct AWS instances
   report the same 64 zero bytes, and the firmware does *not* set `MASK_CHIP_KEY` to say so. On such

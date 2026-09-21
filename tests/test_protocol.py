@@ -136,3 +136,26 @@ def test_the_caller_cannot_assert_its_way_past_the_counter():
     """There is no flag to pass: the chain a step belongs to is derived from the session context."""
     import inspect
     assert "new_session" not in inspect.signature(Mandate.present).parameters
+
+# ---------- a named gap, pinned so it cannot be forgotten ----------
+def test_restart_loses_enrolment_and_downgrades_the_guarantee():
+    """The in-process mandate does not survive a restart.
+
+    This asserts a WEAKNESS on purpose. Nonces, enrolment records and the ledger live in memory, so
+    a restarted mandate no longer knows which instance an identity was enrolled on and silently
+    falls back to the weaker no-enrolment mode. When durable state lands, this test should fail --
+    that is the point of it. See README, 'The mandate is in-process'."""
+    m, tA, tB = _setup()
+    assert TIK.hex() in m.enrolled
+    restarted = Mandate(mock_verifier({tA.pub.hex(), tB.pub.hex()}))
+    assert TIK.hex() not in restarted.enrolled
+    thief = Attester(tB, TIK); c, e = os.urandom(48), os.urandom(32)
+    ok, _ = restarted.present(TIK, c, e, thief.attest(c, e))
+    assert ok, "documented gap: after a restart the impostor is no longer blocked on its first message"
+
+def test_restart_also_invalidates_outstanding_challenges():
+    m, tA, _ = _setup()
+    nonce = m.challenge()
+    restarted = Mandate(mock_verifier({tA.pub.hex()}))
+    ok, why = restarted.enroll(TIK, tA.report(hashlib.sha512(nonce + CSR).digest()), nonce, CSR)
+    assert not ok and "not issued" in why

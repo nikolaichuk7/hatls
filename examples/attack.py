@@ -122,9 +122,20 @@ def a_masked_chip():
     ok,why=m.present(TIK,t,e,a.attest(t,e))
     return show("re-host on a masked-CHIP_ID platform", ok, why)
 
+def a_mandate_restart():
+    "the relying party restarts: the mandate's in-memory enrolment record is gone"
+    fresh_mandate()                        # the victim had enrolled on chip A ...
+    m=Mandate(VERIFY)                      # ... and now the mandate process restarts, empty
+    a=Attester(teeB,TIK); e=os.urandom(32); t=os.urandom(48)      # the THIEF, on chip B
+    ok,why=m.present(TIK,t,e,a.attest(t,e))
+    print(f"  [WEAKER  ] mandate restart: "
+          f"{'got in -- the enrolment record did not survive' if ok else 'stopped'} - {why}")
+    return True                            # informational: a named gap, not a pass/fail attack
+
 ATTACKS={"honest":a_honest,"rehost":a_rehost,"replay":a_replay,"relay":a_relay,
          "forge":a_forge_malleable,"rollback":a_rollback_counter,"splice":a_splice,"noenroll":a_no_enrollment,
-         "hijack":a_enrolment_hijack,"masked":a_masked_chip}
+         "hijack":a_enrolment_hijack,"masked":a_masked_chip,
+         "restart":a_mandate_restart}
 
 if __name__=="__main__":
     which=sys.argv[1:] or list(ATTACKS)
@@ -135,7 +146,7 @@ if __name__=="__main__":
         if not fn: print(f"  unknown attack: {name}"); continue
         r=fn()
         if name=="honest": control_ok=bool(r)
-        elif name!="noenroll": total+=1; stopped+=1 if r else 0
+        elif name not in ("noenroll","restart"): total+=1; stopped+=1 if r else 0
     print(f"\n  attacks stopped: {stopped}/{total}")
     # exit non-zero so CI fails if an attack gets in or the honest control stops working
     if not control_ok: print("  CONTROL FAILED: the honest server was rejected"); sys.exit(1)

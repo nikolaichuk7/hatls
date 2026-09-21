@@ -29,6 +29,20 @@ cannot be made, and the honest response is to refuse rather than to pretend.
 Rejection targets the presenter. An impostor cannot revoke the identity it claims; revocation is an
 explicit operator act ([AUDIT.md](AUDIT.md) finding 3).
 
+## The mandate itself is not in this model, and that is now the largest gap
+
+Every row above assumes the mandate is correct and available. It is neither modelled nor durable:
+its nonces, enrolment records and ledger are in process memory, so a restart loses the enrolment
+records and **silently downgrades an enrolled identity to the weaker no-enrolment mode**. Run
+`PYTHONPATH=. python3 examples/attack.py restart` to watch an impostor, blocked a moment earlier,
+be accepted. Two tests assert this weakness deliberately so that it cannot be forgotten.
+
+Contention has the same shape: the mandate now refuses to destroy an identity on an unauthenticated
+claim, which removed an availability attack, but nothing says who resolves the dispute, on what
+evidence, or in what time. Durable replicated state, an audit trail, a resolution procedure, and
+what a relying party may decide when the mandate is unavailable or lying, are the next body of
+work — and they are operational semantics rather than channel cryptography.
+
 ## Why enrolment breaks the ceiling (the new part)
 
 use-cases 3.8.1 says the attack works when "the appraisal policy does not expect the key to have been
