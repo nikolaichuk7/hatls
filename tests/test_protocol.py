@@ -189,3 +189,20 @@ def test_restart_also_invalidates_outstanding_challenges():
     restarted = Mandate(mock_verifier({tA.pub.hex()}))
     ok, why = restarted.enroll(TIK, tA.report(hashlib.sha512(nonce + CSR).digest()), nonce, CSR)
     assert not ok and "not issued" in why
+
+# ---------- the mandate must state the guarantee it is actually running ----------
+def test_the_first_log_entry_names_the_mode():
+    """Defaults are soft on purpose. A reader of the log must not have to guess which."""
+    m, _, _ = _setup()
+    assert m.log[0][0] == "mandate-mode"
+    assert m.log[0][1] == "in-process" and m.log[0][2] == "enrolment-optional"
+
+def test_the_mode_line_reports_a_durable_store_and_a_required_enrolment():
+    import tempfile, shutil
+    from hatls.store import FileStore
+    d = tempfile.mkdtemp(prefix="hatls-mode-")
+    try:
+        m = Mandate(mock_verifier(set()), store=FileStore(d), require_enrolment=True)
+        assert m.log[0] == ("mandate-mode", "durable", "enrolment-required", "anchor-required")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

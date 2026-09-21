@@ -51,14 +51,70 @@ use-cases 3.8.1 says the attack works when "the appraisal policy does not expect
 created in the Target Environment." Enrolment is exactly that expectation, made concrete and signed
 by hardware:
 
-    enrolment (once):  REPORT_DATA = SHA-512(nonce || CSR)  -> VCEK-signed report binds the key's
-                       public part to CHIP_ID (this is TACRA, which we already built and measured).
-    every session:     the mandate checks the Evidence chip against the enrolled chip. Different
-                       chip -> blocked on the first message, no fork, no victim.
+    enrolment (once):  REPORT_DATA = SHA-512(nonce || CSR)  -> a signed report binds the key's
+                       public part to the INSTANCE it was born on (REPORT_ID). The CSR carries that
+                       key and is self-signed by it, so the report is about this key and no other.
+    every session:     the mandate compares the instance in the Evidence against the enrolled one.
+                       Different instance -> blocked on the first message, no fork, no victim.
 
-The attacker cannot forge CHIP_ID (it is inside the chip-signed report). The attacker cannot make
-Evidence for the enrolled chip (it does not have that chip). So the stolen key is inert anywhere but
-its birth chip. This is prevention, and it needs no second observation.
+The claim is the instance, not the silicon. CHIP_ID is carried alongside as *place* and is a weaker,
+different statement: two guests on one socket share it, and a shared-tenancy platform zeroes it
+entirely -- on AWS, six machines in our archive and two in the live run report 64 zero bytes while
+their REPORT_IDs are all distinct. A design anchored on the chip is blind exactly there, which is
+why this one is not. `Mandate(require_place=True)` pins the silicon as well, for a deployment that
+wants it.
+
+The attacker cannot forge the instance claim (it is inside the chip-signed report, and the AMD-SP
+generates it -- it is not among the SNP_LAUNCH_START inputs, so the hypervisor cannot choose it).
+The attacker cannot produce Evidence for the enrolled instance, because it is not that instance. So
+the stolen key is inert anywhere but where it was enrolled. This is prevention, and it needs no
+second observation.
+
+What it does NOT cover: REPORT_ID travels with a guest across a migration, so wherever migration is
+enabled the migration agent sits inside the trust boundary of this identity. In our corpus
+REPORT_ID_MA is all-ones on all 73 GCP reports, meaning no migration agent -- a measured fact about
+those deployments, not a guarantee. And on Intel TDX no such claim exists at all: two TDs from one
+image differ only in MROWNER, which the host supplies.
+
+## Who may move an identity, and the key that decides it
+
+Two instances presenting genuine evidence for one identity cannot be told apart by looking harder:
+a thief and an operator recovering a dead machine produce the same reports, because in the evidence
+they *are* the same. So the mandate does not adjudicate. An identity may name a **transfer
+authority** at enrolment -- a key held by whoever owns the workload, not by the platform and not by
+the mandate -- and only a grant signed by that key moves it. Grants are single-use, time-bounded,
+and must name the instance being left; a grant that names none is a grant to abduct, and the
+`any_origin` form that drops that requirement is a separate, logged, deliberate act. A destination
+must be an instance the mandate has itself seen produce valid evidence, so nothing is written into
+the ledger about a machine nobody has proved exists.
+
+This adds a key to the threat model, and it is **stronger than the identity key it governs**: a
+stolen TIK cannot move without a grant, while a stolen authority moves the TIK. It therefore must
+not be held inside the attested VM -- if it is, the "owner" is the same process an attacker has
+already taken, and the mechanism collapses into a second copy of the first problem. There is no
+k-of-n and no recovery for a lost authority: losing it strands the identity.
+
+A grant carries **no mandate identifier**. Spent nonces live in one process, so a second,
+independent mandate holding the same enrolment would accept the same grant. That is the federation
+problem, and it is not solved here.
+
+## What the hardware witness protects against, and what it does not
+
+Each decision is a leaf in an append-only log, and a receipt carries an inclusion proof and a
+signed tree head, so the mandate cannot deny what it said or rewrite its past. The head of that log
+was still its own word, so the head goes into the attestation: the verifier hands it over, the
+guest binds it into REPORT_DATA, and the chip signs across it.
+
+That protects against a mandate **lying later**. It does not protect against a mandate and a guest
+**colluding at the time**: between them they choose which head goes in, and the chip signs whatever
+it is given. The property becomes useful only once the report has left their joint control --
+published to a third party, an auditor, or the workload owner. Until then it is their word,
+jointly signed.
+
+The same applies to two mandates over one identity. One report can carry both their heads, so a
+mandate whose later history does not extend the head the chip saw is caught by that one report.
+That is **detection after the fact, never prevention**: two mandates can still admit different
+instances, and nothing here coordinates them. It is not a federation.
 
 ## The one residual case, stated honestly
 
