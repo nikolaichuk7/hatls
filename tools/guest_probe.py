@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""HATLS guest probe — runs INSIDE a real SEV-SNP guest.
+
+A TLS 1.3 server. For each client connection it derives the RFC 9266 exporter of THAT session and
+walks a continuity chain: for counter = 0,1,2,... it computes
+    post_link = HKDF(exporter, prev_link || counter)          (prev_link = intra_link at counter 0)
+and requests a real VCEK-signed SEV-SNP report with
+    REPORT_DATA = SHA-512("HATLS-continuity-v0" || post_link)
+so the hardware itself binds each link. The reports and the chain are archived. The shared TLS
+identity key (TIK) is injected by metadata, so a second guest launched with the same TIK models
+re-hosting. Everything the mandate needs to catch a fork is in the emitted JSON + the 1184-byte
+reports.
+"""
+import socket, json, hashlib, hmac, base64, struct, os, fcntl, ctypes, time
+
+LABEL = b"EXPORTER-Channel-Binding"
+
+def hkdf_expand_label(secret, label, ctx, n=32):
+    full=b"tls13 "+label; info=n.to_bytes(2,"big")+bytes([len(full)])+full+bytes([len(ctx)])+ctx
+    out=t=b""; i=1
+    while len(out)<n: t=hmac.new(secret,t+info+bytes([i]),hashlib.sha384).digest(); out+=t; i+=1
+    return out[:n]
+def intra_link(th, tik_pub):
+    base=hkdf_expand_label(bytes(48),b"attestation base",th,48)
+    return hkdf_expand_label(base,b"attestation",hashlib.sha384(tik_pub).digest(),32)
+def post_link(exp,prev,counter):
+    return hkdf_expand_label(exp,b"continuity",prev+counter.to_bytes(8,"big"),32)
+def report_data_for(link):
+    return hashlib.sha512(b"HATLS-continuity-v0"+link).digest()
+
+class Req(ctypes.Structure):  _fields_=[("user_data",ctypes.c_ubyte*64),("vmpl",ctypes.c_uint32),("flags",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24)]
+class Resp(ctypes.Structure): _fields_=[("status",ctypes.c_uint32),("report_size",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24),("report",ctypes.c_ubyte*4000)]
+class Io(ctypes.Structure):   _fields_=[("msg_version",ctypes.c_ubyte),("req_data",ctypes.c_uint64),("resp_data",ctypes.c_uint64),("exitinfo2",ctypes.c_uint64)]
+def snp_report(user_data):
+    req=Req(); ctypes.memmove(req.user_data,user_data,64); req.vmpl=0; req.flags=0; resp=Resp()
+    io=Io(1,ctypes.addressof(req),ctypes.addressof(resp),0)
+    fd=os.open("/dev/sev-guest",os.O_RDWR); fcntl.ioctl(fd,0xC0205300,io); os.close(fd)
+    if resp.status!=0 or resp.report_size!=1184: raise RuntimeError(f"fw_status {resp.status}")
+    return bytes(resp.report[:1184])
+
+def main():
+    from OpenSSL import SSL, crypto
+    from cryptography.hazmat.primitives import serialization
+    STAMP=time.strftime("%Y%m%dT%H%M%SZ",time.gmtime()); OUT=f"/root/hatls/{STAMP}"; os.makedirs(OUT,exist_ok=True); os.chdir(OUT)
+    meta=lambda k: os.popen(f'curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/{k}').read()
+    iid=meta("name"); zone=meta("zone").split("/")[-1]
+    key_pem=open("/root/guest-tls.key","rb").read(); cert_pem=open("/root/guest-tls.crt","rb").read()
+    priv=serialization.load_pem_private_key(key_pem,None)
+    tik_pub=priv.public_key().public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)
+    ctx=SSL.Context(SSL.TLS_METHOD); ctx.set_min_proto_version(SSL.TLS1_3_VERSION)
+    ctx.use_privatekey(crypto.load_privatekey(crypto.FILETYPE_PEM,key_pem)); ctx.use_certificate(crypto.load_certificate(crypto.FILETYPE_PEM,cert_pem))
+    srv=socket.socket(); srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); srv.bind(("0.0.0.0",8443)); srv.listen(5); srv.settimeout(10)
+    deadline=time.time()+15*60; n=0
+    json.dump({"instance":iid,"zone":zone,"tik_pub_sha256":hashlib.sha256(tik_pub).hexdigest(),"captured":STAMP},open("metadata.json","w"))
+    print(f"HATLS guest {iid} @ {zone} serving 8443",flush=True)
+    while time.time()<deadline:
+        try: s,addr=srv.accept()
+        except socket.timeout: continue
+        n+=1; s.setblocking(True); conn=SSL.Connection(ctx,s); conn.set_accept_state()
+        try:
+            conn.do_handshake()
+            # read: nonce_hex (transcript stand-in provided by client) then run a chain of REATTEST steps
+            line=b""
+            while not line.endswith(b"\n") and len(line)<300: line+=conn.recv(1)
+            req=json.loads(line.strip())
+            if req.get("enroll"):
+                nonce=bytes.fromhex(req["nonce"]); csr=bytes.fromhex(req["csr"])
+                rep=snp_report(hashlib.sha512(nonce+csr).digest())
+                out=json.dumps({"instance":iid,"zone":zone,"enroll":True,
+                                "report":base64.b64encode(rep).decode()}).encode()
+                conn.sendall(struct.pack(">I",len(out))+out); 
+                try: conn.shutdown()
+                except Exception: pass
+                s.close(); continue
+            th=bytes.fromhex(req["transcript"]); steps=int(req.get("steps",3))
+            exp=conn.export_keying_material(LABEL,32,b"")
+            chain=[]; prev=intra_link(th,tik_pub)
+            for counter in range(steps):
+                pl=post_link(exp,prev if counter else intra_link(th,tik_pub),counter)
+                rep=snp_report(report_data_for(pl))
+                open(f"conn{n:02d}-c{counter}-report.bin","wb").write(rep)
+                chain.append({"counter":counter,"post_link":pl.hex(),"report":base64.b64encode(rep).decode()})
+                prev=pl
+            blob=json.dumps({"instance":iid,"zone":zone,"exporter":exp.hex(),
+                             "tik_pub":base64.b64encode(tik_pub).decode(),"cert":base64.b64encode(cert_pem).decode(),
+                             "chain":chain}).encode()
+            conn.sendall(struct.pack(">I",len(blob))+blob)
+            json.dump(json.loads(blob),open(f"conn{n:02d}.json","w"))
+            print(f"conn {n}: chain of {steps} links emitted, exporter {exp.hex()[:16]}",flush=True)
+        except Exception as e:
+            print(f"conn {n} error: {e!r}",flush=True)
+        finally:
+            try: conn.shutdown()
+            except Exception: pass
+            s.close()
+if __name__=="__main__": main()

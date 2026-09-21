@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+vcek-cache/
+*.key
+*.crt
+tik.*
+.DS_Store

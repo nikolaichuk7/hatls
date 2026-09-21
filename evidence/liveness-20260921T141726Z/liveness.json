@@ -1,0 +1,12 @@
+{
+  "zone": "europe-west4-b",
+  "instance": "hatls-live",
+  "chip": ["761022d0abefa2af"],
+  "beacons": 64,
+  "beacon_ms_min": 7.29,
+  "beacon_ms_median": 7.96,
+  "beacon_ms_max": 10237.02,
+  "beacons_per_sec_median": 125.7,
+  "vtpm_readclock": "time: 146187, clock: 147318, reset_count: 4, restart_count: 0, safe: yes",
+  "note": "beacon_ms_max is the first call (driver warmup); median 7.96ms is the steady-state cost"
+}

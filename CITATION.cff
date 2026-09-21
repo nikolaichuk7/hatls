@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: "HATLS — Hybrid Attested TLS with a Continuity Mandate"
+message: "If you use this work, please cite it."
+authors:
+  - family-names: Nikolaichuk
+    given-names: Serhii
+    affiliation: "The Capital Index"
+version: 0.1.0
+date-released: 2026-09-21
+license: Apache-2.0
