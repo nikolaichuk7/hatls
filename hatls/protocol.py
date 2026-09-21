@@ -6,8 +6,14 @@ A RATS continuity layer that sits above a transport binder. The binder proves "t
 talks to a TEE"; the continuity layer proves "and it is still the SAME enrolled instance, in an
 unbroken order, and here is what happens when it is not".
 
-  intra_link  = HKDF(transcript_checkpoint, TIK_pub)         # the early binder, public transcript
-  post_link_n = HKDF(exporter, prev_link || counter_n)       # the post binder, shared secret + order
+  first_link  = HKDF(session_context, TIK_pub)               # the chain's first link
+  post_link_n = HKDF(exporter, prev_link || counter_n)       # each later link, ordered
+
+NOT an in-handshake binder. `session_context` is derived from the COMPLETED TLS 1.3 key schedule,
+which both endpoints can do independently, so the first link lives after the handshake exactly like
+the rest. Nothing here rides inside the handshake and no Evidence is delivered there: that is what
+draft-fossati-seat-early-attestation does, and doing it needs a TLS extension and a hook into the
+stack's transcript, neither of which this implementation has. Everything below is post-handshake.
   Evidence_n  : a TEE report whose REPORT_DATA = SHA-512("HATLS-continuity-v0" || post_link_n)
   Mandate     : an authority over an identity. It admits ONE continuous, ordered, anchor-consistent
                 chain per identity, and names the impostor instead of destroying the identity.
@@ -49,8 +55,10 @@ def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
         t = hmac.new(secret, t+info+bytes([i]), H).digest(); out += t; i+=1
     return out[:n]
 
-def intra_link(transcript_hash, tik_pub):
-    base = _hkdf_expand_label(bytes(48), b"attestation base", transcript_hash, 48)
+def intra_link(session_context, tik_pub):
+    """The chain's first link. The name is historical: this is NOT an in-handshake binder, and
+    `session_context` comes from the completed key schedule, not from a handshake transcript."""
+    base = _hkdf_expand_label(bytes(48), b"attestation base", session_context, 48)
     return _hkdf_expand_label(base, b"attestation", hashlib.sha384(tik_pub).digest(), 32)
 
 def post_link(exporter, prev_link, counter):
