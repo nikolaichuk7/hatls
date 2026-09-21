@@ -191,8 +191,16 @@ mandate accepts. This is an open item, stated rather than hidden.
   The head of that log was still the mandate's own word, so the head now goes into the hardware:
   the verifier hands its current head to the attester, the chip binds it into `REPORT_DATA`, and
   the mandate cannot mint a report claiming a different ledger state because the signing key is the
-  chip's. Verified on live SEV-SNP. It is still **one** component: not replicated, and what a
-  relying party may decide when it is unavailable is unspecified.
+  chip's. Verified on live SEV-SNP.
+- **Two mandates over one identity: divergence is detected, not prevented.** Preventing it needs
+  consensus, with the availability price that implies. Detecting it needs only that the two claims
+  meet somewhere — and there is a channel here that Certificate Transparency does not have, where
+  gossip between clients is the unsolved part. **The attester is the gossip.** Both mandates
+  already trust the same TEE, so one hardware report carries *both* their claimed heads at one
+  moment, under a key belonging to neither. A mandate that later produces a history its witnessed
+  head does not extend is caught with that one report, and it never had to be online for, or
+  trusted by, the other. What remains unspecified is what a relying party may decide while a
+  mandate is unavailable, and there is still no replication.
 - **A disputed identity is resolved by its owner, not by the mandate — and that is a new key to
   protect.** Two instances presenting genuine evidence for one identity cannot be told apart by
   looking harder: a thief and an operator recovering a dead machine produce identical reports. So

@@ -32,6 +32,7 @@ from .store import MemoryStore
 from .transfer import canonical, verify_grant, GRANT_VERSION
 from .log import MerkleLog
 from . import receipt as _receipt
+from . import federation as _fed
 
 # ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
@@ -143,6 +144,7 @@ class Mandate:
         self.merkle = MerkleLog()
         self.last_receipt = None
         self._roots = {self.merkle.head().hex(): 0}   # every head this log has genuinely had
+        self._peers = {}                              # other mandates' heads we have observed
         self.require_anchor = require_anchor
         self.require_enrolment = require_enrolment
         self.require_place = require_place
@@ -217,6 +219,18 @@ class Mandate:
         """SPKI DER. A verifier needs this and nothing else to check a receipt."""
         return self._signing_key.public_key().public_bytes(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    @property
+    def id(self):
+        """A short, stable name for this mandate: the hash of the key it signs heads with."""
+        return _fed.mandate_id(self.public_key)
+
+    def observe(self, peer_spki, peer_sth):
+        """Record another mandate's head and sign that we saw it. Returns our cross-witness."""
+        stmt = _fed.cross_witness(self._signing_key, peer_spki, peer_sth)
+        self._peers.setdefault(_fed.mandate_id(peer_spki), []).append(
+            {"size": peer_sth["size"], "root": peer_sth["root"], "at": stmt["at"]})
+        return stmt
 
     def head_for_attestation(self):
         """The head to hand an attester, so its chip witnesses the ledger state we are claiming."""
@@ -426,7 +440,7 @@ class Mandate:
                      to_instance)
         return True, "transferred to the authorised instance"
 
-    def _appraise(self, tik_pub, session_context, exporter, msg, head=None):
+    def _appraise(self, tik_pub, session_context, exporter, msg, head=None, bundle=None):
         """Appraise one attestation step.
 
         `session_context` and `exporter` MUST both be derived by the Relying Party from ITS OWN
@@ -449,7 +463,21 @@ class Mandate:
 
         # 1) the hardware Evidence must be valid AND bind exactly this post_link
         pl = bytes.fromhex(msg["post_link"])
-        if head is not None and not self.knows_head(head):
+        if head is not None and bundle is not None:
+            # the attester bound a bundle of several mandates' heads: check it is the one we were
+            # part of, and that OUR entry in it is a head this log genuinely had. What the other
+            # entries say is not ours to judge -- it is evidence for whoever holds the report.
+            if not _fed.verify_bundle(head, bundle):
+                self._emit(("declined-bad-bundle", k[:16]))
+                return False, "the witnessed bundle does not match what was bound", instance
+            mine = _fed.entry_for(bundle, self.public_key)
+            if mine is None:
+                self._emit(("declined-absent-from-bundle", k[:16]))
+                return False, "this mandate is not named in the bundle the attester witnessed", instance
+            if not self.knows_head(bytes.fromhex(mine["root"])):
+                self._emit(("declined-unknown-head", k[:16], mine["root"][:12]))
+                return False, "the bundle names a head for this mandate that its log never had", instance
+        elif head is not None and not self.knows_head(head):
             self._emit(("declined-unknown-head", k[:16], head.hex()[:12]))
             return False, "the ledger head offered for this attestation is not one this log had", instance
         ok, anchor = self.verify_report(msg["evidence"], report_data_for(pl, head))
@@ -549,13 +577,17 @@ class Mandate:
                     instance.hex()[:12] if instance else "no-instance"))
         return True, "accepted; continuity intact", instance
 
-    def present(self, tik_pub, session_context, exporter, msg, head=None):
+    def present(self, tik_pub, session_context, exporter, msg, head=None, bundle=None):
         """Appraise one step and record the decision in the log. Returns (accepted, reason);
         the receipt for this decision is `self.last_receipt`.
 
         `head` is the ledger head this relying party gave the attester before it signed. When one
         is used, the hardware report commits to it, and the report becomes evidence of what this
-        mandate claimed its log was at that moment."""
-        ok, why, instance = self._appraise(tik_pub, session_context, exporter, msg, head)
+        mandate claimed its log was at that moment.
+
+        `bundle` is the entry list when `head` is a commitment over SEVERAL mandates' heads. We
+        check our own entry and let the rest stand as evidence for whoever holds the report; see
+        hatls.federation."""
+        ok, why, instance = self._appraise(tik_pub, session_context, exporter, msg, head, bundle)
         self._record("present", tik_pub, ok, why, instance)
         return ok, why
