@@ -210,10 +210,12 @@ succeeds on three distinct live chips; a single flipped `MEASUREMENT` byte is re
   than a silent downgrade — but the mandate is still a single component: not replicated, issuing no
   receipts, and unauditable after the fact by anyone else. What a relying party may decide when the
   mandate is unavailable or lying remains unspecified.
-- **Contention is recorded but never resolved.** Refusing to revoke on an unauthenticated claim
-  removed an availability attack; it did not say who adjudicates the dispute, on what evidence, or
-  within what bound. This and the previous item are operational semantics rather than channel
-  cryptography — closer to SCITT than to TLS.
+- **Dispute resolution now exists, and brings its own key.** An identity may name a transfer
+  authority at enrolment; only a single-use, time-bounded grant signed by it moves the identity.
+  The mandate enforces rather than adjudicates. The new exposure is that authority key: lose it and
+  the workload is stranded, steal it and the workload moves. No k-of-n, no authority recovery.
+- **Federation is unspecified.** Nothing says how two mandates serving one identity stay
+  consistent, which is where the SCITT comparison actually bites.
 - **The identity is proved by possession, not by a CA.** Without `ca_file` the client runs
   `VERIFY_NONE` deliberately: TLS 1.3 CertificateVerify proves the peer holds the key, and the
   mandate decides whether that key is legitimate. Nothing here validates a PKI chain, and the

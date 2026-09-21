@@ -147,10 +147,50 @@ def a_mandate_restart():
         shutil.rmtree(d, ignore_errors=True)
     return True                            # informational: shows the default AND the two fixes
 
+def _transferable_mandate():
+    """A mandate where the victim enrolled on chip A and named an owner key as transfer authority."""
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from hatls.transfer import authority_public_bytes
+    owner=_ec.generate_private_key(_ec.SECP256R1())
+    m=Mandate(VERIFY); n=m.challenge()
+    ok,why=m.enroll(TIK, teeA.report(hashlib.sha512(n+CSR).digest()), n, CSR,
+                    transfer_authority=authority_public_bytes(owner))
+    assert ok, why
+    return m, owner
+
+def a_forge_grant():
+    "mint your own transfer grant and move the victim's identity onto your chip"
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from hatls.transfer import make_grant
+    m,_owner=_transferable_mandate()
+    rogue=_ec.generate_private_key(_ec.SECP256R1())          # the attacker's own key
+    grant,sig=make_grant(rogue, TIK, CHIP_B)
+    ok,why=m.accept_transfer(TIK, grant, sig)
+    return show("forge a transfer grant",ok,why)
+
+def a_replay_grant():
+    "reuse a grant the owner legitimately issued once"
+    from hatls.transfer import make_grant
+    m,owner=_transferable_mandate()
+    grant,sig=make_grant(owner, TIK, CHIP_B)
+    m.accept_transfer(TIK, grant, sig)                       # the legitimate move happens
+    ok,why=m.accept_transfer(TIK, grant, sig)                # the attacker keeps the paperwork
+    return show("replay a used transfer grant",ok,why)
+
+def a_redirect_grant():
+    "intercept a genuine grant and rewrite its destination to your own chip"
+    from hatls.transfer import make_grant
+    m,owner=_transferable_mandate()
+    grant,sig=make_grant(owner, TIK, CHIP_B)
+    grant["to"]=(b"\x99"*64).hex()                            # redirect after signing
+    ok,why=m.accept_transfer(TIK, grant, sig)
+    return show("redirect a genuine grant",ok,why)
+
 ATTACKS={"honest":a_honest,"rehost":a_rehost,"replay":a_replay,"relay":a_relay,
          "forge":a_forge_malleable,"rollback":a_rollback_counter,"splice":a_splice,"noenroll":a_no_enrollment,
          "hijack":a_enrolment_hijack,"masked":a_masked_chip,
-         "restart":a_mandate_restart}
+         "restart":a_mandate_restart,"forgegrant":a_forge_grant,
+         "replaygrant":a_replay_grant,"redirectgrant":a_redirect_grant}
 
 if __name__=="__main__":
     which=sys.argv[1:] or list(ATTACKS)

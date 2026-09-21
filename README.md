@@ -187,10 +187,15 @@ mandate accepts. This is an open item, stated rather than hidden.
   and nothing lets a third party audit its answers after the fact — so it is not the transparency
   service the vocabulary of SCITT would imply. It is also absent from the threat model: what a
   relying party may still decide when the mandate is unavailable, or lying, is unspecified.
-- **Contention is recorded but never resolved.** Refusing to revoke on an unauthenticated claim
-  removed an availability attack; it did not say who adjudicates a dispute, on what evidence, or
-  within what bound. That is the next piece of work, and it is operational semantics rather than
-  channel cryptography.
+- **A disputed identity is resolved by its owner, not by the mandate — and that is a new key to
+  protect.** Two instances presenting genuine evidence for one identity cannot be told apart by
+  looking harder: a thief and an operator recovering a dead machine produce identical reports. So
+  an identity may name a **transfer authority** at enrolment, and only a grant signed by that key —
+  single-use, time-bounded, optionally pinned to the instance being left — moves it. The mandate
+  enforces; it does not adjudicate. An identity that names no authority cannot be moved at all,
+  which is the safe default and also means a dead machine ends it. The honest cost: that authority
+  key now protects the identity, so losing it strands the workload and stealing it moves the
+  workload. There is no k-of-n and no recovery path for a lost authority yet.
 - **No instance anchor on some platforms.** Re-host detection rests on the SEV-SNP `CHIP_ID`. Under
   a shared-tenancy VLEK that field is **all zeros**: in our own archive, six distinct AWS instances
   report the same 64 zero bytes, and the firmware does *not* set `MASK_CHIP_KEY` to say so. On such
