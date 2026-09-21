@@ -152,7 +152,7 @@ stopped**, a real TLS relay on localhost, and a benchmark that reproduces every 
 | Does it slow the connection? | one attestation report at setup (~8 ms, once); after that the per-step link is **2.5 microseconds** (~400k/sec) |
 | How fast can the mandate verify? | **~1 ms per check incl. ECDSA verify, ~920 checks/sec per core**, scales with cores |
 | Liveness beacon cost on real silicon | **7.96 ms median**, up to ~125/sec; you emit one per policy interval (e.g. once a second), not per packet |
-| Will it reject legitimate users? | legitimate reconnects from the enrolled instance: **0 false rejects / 500** |
+| Will it reject legitimate users? | legitimate reconnects from the enrolled instance: **0 false rejects / 500** (no migration in those 500; a migration to other silicon is the separate false-positive risk below) |
 | Will an impersonation slip through? | stolen key on a different instance: **0 missed / 500** |
 | Does normal in-session traffic break the chain? | **0 false breaks / 500** |
 | Can one identity hold several connections at once? | 16 parallel connections: **0 false breaks / 496** |
@@ -179,10 +179,6 @@ mandate accepts. This is an open item, stated rather than hidden.
   the private half of the certificate it presented, and whether *that* key is legitimate is the
   mandate's answer, not a CA's. So HATLS **does not validate a certificate chain** unless you pass
   `ca_file`, and nothing here should be read as "we check the certificate" in the PKI sense.
-- **The anchor answers "same silicon", not "same instance".** Two guests on one socket share a
-  `CHIP_ID`, so re-hosting between VMs on one physical machine is invisible; a guest migrated to
-  another socket reads as a fork. That is the ceiling of the claim we chose, not a bug we can
-  patch — see the open question below.
 - **The mandate's ledger is durable only if you give it a store.** The default `MemoryStore` keeps
   enrolment, revocation and contention in memory, so a restart loses them — and a lost ledger is
   indistinguishable from an identity that was never enrolled, which would quietly downgrade the
