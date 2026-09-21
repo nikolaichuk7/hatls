@@ -67,7 +67,7 @@ def main():
     priv=serialization.load_pem_private_key(key_pem,None)
     tik_pub=priv.public_key().public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)
     ctx=SSL.Context(SSL.TLS_METHOD); ctx.set_min_proto_version(SSL.TLS1_3_VERSION)
-    ctx.use_privatekey(crypto.load_privatekey(crypto.FILETYPE_PEM,key_pem)); ctx.use_certificate(crypto.load_certificate(crypto.FILETYPE_PEM,cert_pem))
+    ctx.use_privatekey(priv); ctx.use_certificate(x509.load_pem_x509_certificate(cert_pem))
     srv=socket.socket(); srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); srv.bind(("0.0.0.0",8443)); srv.listen(5); srv.settimeout(10)
     deadline=time.time()+15*60; n=0
     json.dump({"instance":iid,"zone":zone,"tik_pub_sha256":hashlib.sha256(tik_pub).hexdigest(),"captured":STAMP},open("metadata.json","w"))

@@ -54,9 +54,11 @@ def _line(c):
     return b
 
 def _server_ctx(key_pem, cert_pem):
+    # pyOpenSSL takes cryptography objects directly; its own PKey/X509 wrappers are deprecated
+    # and warn, which is not what a first run of someone else's code should print.
     ctx=SSL.Context(SSL.TLS_METHOD); ctx.set_min_proto_version(SSL.TLS1_3_VERSION)
-    ctx.use_privatekey(crypto.load_privatekey(crypto.FILETYPE_PEM,key_pem))
-    ctx.use_certificate(crypto.load_certificate(crypto.FILETYPE_PEM,cert_pem))
+    ctx.use_privatekey(serialization.load_pem_private_key(key_pem, None))
+    ctx.use_certificate(x509.load_pem_x509_certificate(cert_pem))
     return ctx
 
 def guest_server(priv, key_pem, cert_pem, tee, conns, ready):
