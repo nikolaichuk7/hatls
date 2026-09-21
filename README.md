@@ -195,14 +195,27 @@ mandate accepts. This is an open item, stated rather than hidden.
   enforces; it does not adjudicate. An identity that names no authority cannot be moved at all,
   which is the safe default and also means a dead machine ends it. The honest cost: that authority
   key now protects the identity, so losing it strands the workload and stealing it moves the
-  workload. There is no k-of-n and no recovery path for a lost authority yet.
-- **No instance anchor on some platforms.** Re-host detection rests on the SEV-SNP `CHIP_ID`. Under
-  a shared-tenancy VLEK that field is **all zeros**: in our own archive, six distinct AWS instances
-  report the same 64 zero bytes, and the firmware does *not* set `MASK_CHIP_KEY` to say so. On such
-  a platform HATLS **fails closed** rather than pretending, and `require_anchor=False` lets a
-  deployer accept the downgrade knowingly: ordering and relay defence still hold, re-host detection
-  does not. Which claim *should* carry instance identity across SNP, TDX and Nitro is an open
-  question we would like the working groups to settle.
+  workload — so **it must not live inside the attested VM**, or the "owner" is the same process an
+  attacker has already taken. There is no k-of-n and no recovery path for a lost authority.
+  Three more limits of the grant, stated rather than discovered: it names **instances**, so it can
+  only move what the mandate can identify; it is only valid at the mandate holding that enrolment,
+  because nonces are consumed locally and nothing stops the same grant being shown to a second,
+  independent mandate; and `nbf`/`exp` are the issuer's clock, which makes the window an
+  operational bound and not a cryptographic one. The signed bytes are canonical JSON, which is
+  adequate here and is **not** an interoperable encoding — a specification would use COSE.
+- **Identity is the instance claim, not the silicon.** HATLS anchors on SEV-SNP `REPORT_ID`, which
+  the AMD-SP generates per guest and which persists for that guest's lifetime; it is not an input
+  to `SNP_LAUNCH_START`, so the hypervisor cannot choose it. `CHIP_ID` is carried separately as a
+  *place* claim and is not identity: two guests on one socket share it, and a shared-tenancy VLEK
+  report zeroes it — in our archive six distinct AWS instances report 64 zero bytes while their
+  `REPORT_ID`s are all distinct, and on that platform the VLEK **signing key is shared region-wide
+  too**, so neither the chip nor the signature separates two machines. A deployment that wants
+  silicon pinning asks for it with `require_place=True`.
+  The consequence to understand: `REPORT_ID` travels with a guest across migration (the firmware
+  marks it `Migrated? = Yes`), so **where migration is enabled the migration agent is inside the
+  trust boundary of this identity**. In our corpus `REPORT_ID_MA` is all-ones on all 73 GCP
+  reports, i.e. no migration agent — a measured fact about those deployments, not a guarantee.
+  What the equivalent claim is on TDX and Nitro is still open.
 - Measured on one cloud and one silicon vendor so far. AWS, Azure, and Intel TDX are next.
 - The physical-insider case is narrowed, not eliminated — it cannot be, by the nature of any
   signing key. The beacon interval bounds detection resolution, not the attacker's window.

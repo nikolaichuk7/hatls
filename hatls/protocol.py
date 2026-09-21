@@ -113,10 +113,12 @@ class Mandate:
     The mandate itself is trusted, and is not part of the threat model in docs/THREAT-MODEL.md.
     """
     def __init__(self, verify_report, require_anchor=True, require_enrolment=False,
-                 store=None, challenge_ttl=300):
+                 require_place=False, store=None, challenge_ttl=300, witness_ttl=3600):
         self.verify_report = verify_report
         self.require_anchor = require_anchor
         self.require_enrolment = require_enrolment
+        self.require_place = require_place
+        self.witness_ttl = witness_ttl
         self.store = store if store is not None else MemoryStore()
         self.challenge_ttl = challenge_ttl
         self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  ephemeral
@@ -124,9 +126,11 @@ class Mandate:
         self.log = []
 
     # ---- the durable ledger -------------------------------------------------------
-    _BLANK = {"enrolled_anchor": None, "observed_anchor": None,
+    _BLANK = {"enrolled_instance": None, "enrolled_place": None,
+              "observed_instance": None, "observed_place": None,
               "revoked": False, "reason": None, "contention": [],
-              "transfer_authority": None, "transfers": [], "consumed_grants": []}
+              "transfer_authority": None, "transfers": [], "consumed_grants": [],
+              "witnessed": []}
 
     def _rec(self, k):
         r = self.store.get(k)
@@ -139,9 +143,10 @@ class Mandate:
 
     @property
     def enrolled(self):
+        """identity -> the INSTANCE it is enrolled on (REPORT_ID on SEV-SNP, not CHIP_ID)."""
         out = {}
         for k in self.store.keys():
-            a = (self.store.get(k) or {}).get("enrolled_anchor")
+            a = (self.store.get(k) or {}).get("enrolled_instance")
             if a: out[k] = bytes.fromhex(a)
         return out
 
@@ -150,9 +155,23 @@ class Mandate:
         out = {}
         for k in self.store.keys():
             r = self.store.get(k) or {}
-            a = r.get("observed_anchor")
-            out[k] = {"anchor": bytes.fromhex(a) if a else None, "revoked": r.get("revoked", False)}
+            a = r.get("observed_instance"); p = r.get("enrolled_place")
+            out[k] = {"anchor": bytes.fromhex(a) if a else None,
+                      "place": bytes.fromhex(p) if p else None,
+                      "revoked": r.get("revoked", False)}
         return out
+
+    def _witness(self, rec, inst, place):
+        """Record an instance whose evidence we actually verified.
+
+        A transfer may only point at one of these. Writing an instance into the ledger that nobody
+        has ever proved exists would let a grant name a machine that was never there."""
+        now = int(time.time())
+        seen = [w for w in rec["witnessed"]
+                if w["instance"] != inst.hex() and now - w["at"] < self.witness_ttl]
+        rec["witnessed"] = (seen + [{"instance": inst.hex(),
+                                     "place": place.hex() if place else None,
+                                     "at": now}])[-32:]
 
     @property
     def contention(self):
@@ -164,11 +183,12 @@ class Mandate:
 
     def _emit(self, ev): self.log.append(ev)
 
-    def _dispute(self, k, reason):
-        """Record a dispute WITH a timestamp: 'within what bound' is not answerable without one."""
-        rec = self._rec(k)
+    def _dispute(self, rec, reason):
+        """Record a dispute WITH a timestamp: 'within what bound' is not answerable without one.
+
+        Mutates the record the caller is holding rather than doing its own read-modify-write, so a
+        later save of that record cannot silently erase the dispute."""
         rec["contention"] = (rec["contention"] + [{"at": int(time.time()), "why": reason}])[-64:]
-        self._save(k, rec)
 
     # ---- challenge/response: the mandate picks the nonce, and it expires ----
     def challenge(self):
@@ -199,7 +219,7 @@ class Mandate:
             self._emit(("enroll-rejected", k[:16], "nonce expired"))
             return False, "nonce expired"
         rec = self._rec(k)
-        if rec["enrolled_anchor"] is not None:
+        if rec["enrolled_instance"] is not None:
             self._emit(("enroll-rejected", k[:16], "already enrolled"))
             return False, "identity already enrolled; re-enrolment is an operator action"
         try:
@@ -216,24 +236,49 @@ class Mandate:
             self._emit(("enroll-rejected", k[:16], "evidence invalid"))
             return False, "enrolment evidence invalid"
         if anchor is None:
-            self._emit(("enroll-rejected", k[:16], "platform exposes no instance anchor"))
-            return False, ("platform exposes no usable instance anchor (masked CHIP_ID): "
+            self._emit(("enroll-rejected", k[:16], "platform exposes no instance claim"))
+            return False, ("platform exposes no usable instance claim: "
                            "continuity-to-an-instance cannot be enrolled here")
+        if self.require_place and anchor.get("place") is None:
+            self._emit(("enroll-rejected", k[:16], "platform exposes no place claim"))
+            return False, "platform exposes no place claim and this mandate requires one"
         del self._challenges[nonce]
-        rec["enrolled_anchor"] = anchor.hex()
+        rec["enrolled_instance"] = anchor["instance"].hex()
+        rec["enrolled_place"] = anchor["place"].hex() if anchor.get("place") else None
         if transfer_authority is not None:
             rec["transfer_authority"] = transfer_authority.hex()
         self._save(k, rec)
-        self._emit(("enrolled", k[:16], anchor.hex()[:12],
+        self._emit(("enrolled", k[:16], anchor["instance"].hex()[:12],
                     "transferable" if transfer_authority is not None else "fixed"))
         return True, "enrolled"
+
+    def revoke(self, tik_pub, reason="operator"):
+        """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
+        k = tik_pub.hex()
+        rec = self._rec(k); rec["revoked"] = True; rec["reason"] = reason
+        self._save(k, rec)
+        self._emit(("revoked", k[:16], reason))
+        return True, f"identity revoked: {reason}"
 
     def accept_transfer(self, tik_pub, grant, signature):
         """Move an enrolled identity to another instance, on the authority named at enrolment.
 
         The mandate does not decide who is right. It checks that the party the identity itself
-        nominated has said so, recently, once, and about this identity. Returns (accepted, reason).
-        """
+        nominated has said so, recently, once, about this identity, about the instance it is
+        actually on, and about an instance this mandate has itself seen produce valid evidence.
+
+        Two of those deserve saying out loud. A grant that does not name the instance being left
+        is a grant to abduct: whoever holds the authority key could lift the identity off a healthy
+        machine without ever showing they were entitled to leave it. And a destination the mandate
+        has never witnessed is a machine nobody has proved exists -- writing it into the ledger
+        would strand the identity on a fiction. Recovery from a dead instance still works, because
+        the dead instance's last valid evidence is what `from` names.
+
+        NOTE: a grant is only valid at the mandate that holds this enrolment. Nonces are consumed
+        locally, so nothing stops the same grant being presented to a second, independent mandate.
+        Making that safe needs a shared log, which is the federation problem and is not solved here.
+
+        Returns (accepted, reason)."""
         k = tik_pub.hex()
         rec = self._rec(k)
         def no(reason, tag):
@@ -241,7 +286,7 @@ class Mandate:
             return False, reason
         if rec["revoked"]:
             return no("identity revoked", "revoked")
-        if rec["enrolled_anchor"] is None:
+        if rec["enrolled_instance"] is None:
             return no("identity is not enrolled; there is nothing to transfer", "not-enrolled")
         if rec["transfer_authority"] is None:
             return no("identity named no transfer authority at enrolment and cannot be moved",
@@ -256,38 +301,53 @@ class Mandate:
             return no("grant is not signed by this identity's transfer authority", "bad-signature")
         now = int(time.time())
         if not (int(grant.get("nbf", 0)) <= now <= int(grant.get("exp", 0))):
-            return no("grant is outside its validity window", "expired")
+            return no("grant is outside its validity window "
+                      "(times are the issuer's clock; allow for skew)", "expired")
         if grant.get("nonce") in rec["consumed_grants"]:
             return no("grant has already been used", "replayed")
-        if grant.get("from") is not None and grant["from"] != rec["enrolled_anchor"]:
+
+        # the instance being left must be named, or the operator must have said otherwise in the
+        # grant itself -- which is logged separately, because it is a much stronger permission
+        any_origin = bool(grant.get("any_origin"))
+        if grant.get("from") is None and not any_origin:
+            return no("grant does not name the instance being left", "no-origin")
+        if grant.get("from") is not None and grant["from"] != rec["enrolled_instance"]:
             return no("grant was issued for a different current instance", "from-mismatch")
+
+        to_hex = grant.get("to")
+        if not isinstance(to_hex, str):
+            return no("grant carries an unreadable destination", "bad-destination")
         try:
-            to_anchor = bytes.fromhex(grant["to"])
+            to_instance = bytes.fromhex(to_hex)
         except Exception:
             return no("grant carries an unreadable destination", "bad-destination")
-        if not any(to_anchor):
-            return no("cannot transfer to a platform with no instance anchor", "no-anchor")
+        if not any(to_instance):
+            return no("cannot transfer to a platform with no instance claim", "no-anchor")
 
-        previous = rec["enrolled_anchor"]
-        rec["enrolled_anchor"] = grant["to"]
-        rec["observed_anchor"] = None
-        rec["transfers"] = (rec["transfers"] + [{"at": now, "from": previous, "to": grant["to"],
-                                                 "nonce": grant["nonce"]}])[-64:]
+        # the destination must be an instance THIS mandate has seen produce valid evidence
+        witness = next((w for w in rec["witnessed"]
+                        if w["instance"] == to_hex and now - w["at"] < self.witness_ttl), None)
+        if witness is None:
+            return no("destination instance has not presented valid evidence to this mandate "
+                      "(let it attest first, then issue the grant)", "unwitnessed")
+
+        previous = rec["enrolled_instance"]
+        rec["enrolled_instance"] = to_hex
+        rec["enrolled_place"] = witness.get("place")
+        rec["observed_instance"] = None
+        rec["observed_place"] = None
+        rec["transfers"] = (rec["transfers"] + [{"at": now, "from": previous, "to": to_hex,
+                                                 "nonce": grant["nonce"],
+                                                 "any_origin": any_origin}])[-64:]
         rec["consumed_grants"] = (rec["consumed_grants"] + [grant["nonce"]])[-256:]
         self._save(k, rec)
-        # the old instance is no longer authorised, so its live chains end here
+        # the instance left behind is no longer authorised, so its live chains end here
         for key in [x for x in self.sessions if x[0] == k]:
             del self.sessions[key]
-        self._emit(("transferred", k[:16], (previous or "")[:12], grant["to"][:12]))
+        if any_origin:
+            self._emit(("transfer-any-origin", k[:16], (previous or "")[:12], to_hex[:12]))
+        self._emit(("transferred", k[:16], (previous or "")[:12], to_hex[:12]))
         return True, "transferred to the authorised instance"
-
-    def revoke(self, tik_pub, reason="operator"):
-        """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
-        k = tik_pub.hex()
-        rec = self._rec(k); rec["revoked"] = True; rec["reason"] = reason
-        self._save(k, rec)
-        self._emit(("revoked", k[:16], reason))
-        return True, f"identity revoked: {reason}"
 
     def present(self, tik_pub, session_context, exporter, msg):
         """Appraise one attestation step.
@@ -322,34 +382,59 @@ class Mandate:
         if anchor is None:
             if self.require_anchor:
                 self._emit(("declined-no-anchor", k[:16], msg["counter"]))
-                return False, ("platform exposes no usable instance anchor: re-hosting is "
+                return False, ("platform exposes no usable instance claim: re-hosting is "
                                "undecidable here (set require_anchor=False to accept that)")
             self._emit(("anchor-absent-downgraded", k[:16], msg["counter"]))
 
-        enrolled_anchor = bytes.fromhex(rec["enrolled_anchor"]) if rec["enrolled_anchor"] else None
+        enrolled_instance = (bytes.fromhex(rec["enrolled_instance"])
+                             if rec["enrolled_instance"] else None)
+        instance = anchor["instance"] if anchor else None
+        place = anchor.get("place") if anchor else None
 
         # 1b) NO SILENT DOWNGRADE. An empty ledger and a deliberately unenrolled identity look the
         #     same from here, so a deployment that relies on the enrolment gate must say so: a lost
         #     or wiped ledger then refuses service instead of quietly reverting to the weaker mode.
-        if enrolled_anchor is None and self.require_enrolment:
+        if enrolled_instance is None and self.require_enrolment:
             self._emit(("declined-not-enrolled", k[:16], msg["counter"]))
             return False, ("identity has no enrolment on record and this mandate requires one "
                            "(a lost ledger must not silently downgrade the guarantee)")
 
         # 1c) ENROLMENT GATE. Evidence from any instance other than the enrolled one is an
         #     impostor, rejected on its FIRST message. We know which instance is legitimate, so we
-        #     reject the PRESENTER and leave the victim's identity untouched.
-        if enrolled_anchor is not None and anchor is not None and anchor != enrolled_anchor:
-            self._dispute(k, "evidence from a non-enrolled instance")
-            self._emit(("rejected-impostor", k[:16], enrolled_anchor.hex()[:12], anchor.hex()[:12], msg["counter"]))
+        #     reject the PRESENTER and leave the victim's identity untouched. The evidence was
+        #     valid, though, so we record having seen that instance: a later transfer may only
+        #     point at an instance this mandate has actually witnessed.
+        if enrolled_instance is not None and instance is not None and instance != enrolled_instance:
+            self._witness(rec, instance, place)
+            self._dispute(rec, "evidence from a non-enrolled instance")
+            self._save(k, rec)
+            self._emit(("rejected-impostor", k[:16], enrolled_instance.hex()[:12],
+                        instance.hex()[:12], msg["counter"]))
             return False, "rejected: key presented from an instance it was not enrolled on"
+
+        # 1d) a deployment may additionally pin the silicon. This is a separate, weaker claim than
+        #     identity: two guests on one socket share a place, and a shared-tenancy platform has
+        #     none at all.
+        if self.require_place and place is None:
+            self._emit(("declined-no-place", k[:16], msg["counter"]))
+            return False, "platform exposes no place claim and this mandate requires one"
+        enrolled_place = bytes.fromhex(rec["enrolled_place"]) if rec["enrolled_place"] else None
+        if self.require_place and enrolled_place is not None and place != enrolled_place:
+            self._dispute(rec, "instance moved to different silicon")
+            self._save(k, rec)
+            self._emit(("declined-place-changed", k[:16], msg["counter"]))
+            return False, "the enrolled instance is reporting from different silicon"
 
         # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent and
         #    record a dispute. We do NOT destroy the identity on an unauthenticated claim.
-        observed = bytes.fromhex(rec["observed_anchor"]) if rec["observed_anchor"] else None
-        if observed is not None and anchor is not None and anchor != observed:
-            self._dispute(k, "second instance under one identity")
-            self._emit(("contention-anchor", k[:16], observed.hex()[:12], anchor.hex()[:12], msg["counter"]))
+        observed = (bytes.fromhex(rec["observed_instance"])
+                    if rec["observed_instance"] else None)
+        if observed is not None and instance is not None and instance != observed:
+            self._witness(rec, instance, place)
+            self._dispute(rec, "second instance under one identity")
+            self._save(k, rec)
+            self._emit(("contention-anchor", k[:16], observed.hex()[:12],
+                        instance.hex()[:12], msg["counter"]))
             return False, ("continuity contention: a second instance claims this identity "
                            "(no enrolment on record, so the mandate refuses to pick a winner)")
 
@@ -363,20 +448,22 @@ class Mandate:
             base = intra_link(session_context, tik_pub)
         else:
             if msg["counter"] != sess["counter"] + 1:
-                self._dispute(k, "counter did not advance")
+                self._dispute(rec, "counter did not advance"); self._save(k, rec)
                 self._emit(("declined-counter", k[:16], sess["counter"], msg["counter"]))
                 return False, "counter did not advance by one (replay or reorder)"
             base = sess["prev"]
 
         # 4) recompute the link ourselves from values we derived, not values we were handed
         if post_link(exporter, base, msg["counter"]) != pl:
-            self._dispute(k, "link does not chain")
+            self._dispute(rec, "link does not chain"); self._save(k, rec)
             self._emit(("declined-linkmismatch", k[:16], msg["counter"]))
             return False, "link does not chain (relay, replay or a foreign session)"
 
         self.sessions[(k, skey)] = {"prev": pl, "counter": msg["counter"]}
-        if anchor is not None:
-            rec["observed_anchor"] = anchor.hex()
+        if instance is not None:
+            rec["observed_instance"] = instance.hex()
+            rec["observed_place"] = place.hex() if place else None
             self._save(k, rec)
-        self._emit(("accept", k[:16], skey[:8], msg["counter"], (anchor or b"").hex()[:12]))
+        self._emit(("accept", k[:16], skey[:8], msg["counter"],
+                    instance.hex()[:12] if instance else "no-instance"))
         return True, "accepted; continuity intact"

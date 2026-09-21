@@ -37,12 +37,25 @@ def test_no_archived_guest_allowed_debug():
     for path, b in REPORTS:
         assert not (parse_snp(b)["policy"] & POLICY_DEBUG), f"{path}: DEBUG policy set"
 
-def test_anchor_is_absent_exactly_when_the_identifier_is():
+def test_every_archived_report_carries_an_instance_claim():
+    """REPORT_ID is present on all three clouds, including where CHIP_ID is masked away."""
+    for path, b in REPORTS:
+        a = snp_anchor(parse_snp(b))
+        assert a is not None and any(a["instance"]), f"{path}: no instance claim"
+
+def test_place_is_absent_exactly_when_the_silicon_identifier_is():
     for path, b in REPORTS:
         f = parse_snp(b)
-        assert (snp_anchor(f) is None) == bool(f["mask_chip_key"] or f["chip_id_zero"])
+        assert (snp_anchor(f)["place"] is None) == bool(f["mask_chip_key"] or f["chip_id_zero"])
 
 def test_a_zeroed_chip_id_never_becomes_an_identity():
+    """It may cost the place claim; it must never be handed back as the instance."""
     for path, b in REPORTS:
         f = dict(parse_snp(b)); f["chip_id"] = bytes(64); f["chip_id_zero"] = True
+        a = snp_anchor(f)
+        assert a["place"] is None and a["instance"] != bytes(32)
+
+def test_no_instance_claim_means_no_anchor_at_all():
+    for path, b in REPORTS:
+        f = dict(parse_snp(b)); f["report_id"] = bytes(32)
         assert snp_anchor(f) is None

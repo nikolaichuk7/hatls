@@ -77,25 +77,55 @@ def test_enrolment_nonce_cannot_be_replayed():
     ok,why=m.enroll(OTHER, tA.report(hashlib.sha512(stale+OTHER_CSR).digest()), stale, OTHER_CSR)
     assert not ok and "not issued" in why
 
-# ---------------- audit regressions: the anchor must exist ----------------
-def test_masked_anchor_cannot_be_enrolled():
-    z=MockTEE(ZERO); m=Mandate(mock_verifier({z.pub.hex()})); n=m.challenge()
-    ok,why=m.enroll(TIK, z.report(hashlib.sha512(n+CSR).digest()), n, CSR)
-    assert not ok and "anchor" in why
+# ---------------- the anchor must exist, and it must be the right claim ----------------
+def test_a_platform_with_no_instance_claim_fails_closed():
+    """No REPORT_ID means the instance question is unanswerable, whatever else is present."""
+    z = MockTEE(CHIP_A, instance_id=ZERO[:32])
+    m = Mandate(mock_verifier({z.pub.hex()}))
+    a = Attester(z, TIK); c, e = os.urandom(48), os.urandom(32)
+    ok, why = m.present(TIK, c, e, a.attest(c, e))
+    assert not ok and "instance claim" in why
 
-def test_masked_anchor_fails_closed_on_present():
-    """Two DIFFERENT machines both reporting an all-zero CHIP_ID (AWS shared-tenancy VLEK)."""
-    z1=MockTEE(ZERO); z2=MockTEE(ZERO); m=Mandate(mock_verifier({z1.pub.hex(), z2.pub.hex()}))
-    a=Attester(z2,TIK); e=os.urandom(32); t=os.urandom(48)
-    ok,why=m.present(TIK,t,e,a.attest(t,e))
-    assert not ok and "anchor" in why
+def test_a_masked_chip_no_longer_blinds_the_mandate():
+    """THE AWS CASE. CHIP_ID is all zeros, as it is under a shared-tenancy VLEK, yet the two
+    machines are still told apart -- because identity lives in REPORT_ID, not in the silicon.
+    Anchored on CHIP_ID this was undetectable, with no error raised anywhere."""
+    a1 = MockTEE(ZERO); a2 = MockTEE(ZERO)          # two AWS instances, no place claim at all
+    m = Mandate(mock_verifier({a1.pub.hex(), a2.pub.hex()}))
+    n = m.challenge()
+    ok, why = m.enroll(TIK, a1.report(hashlib.sha512(n + CSR).digest()), n, CSR)
+    assert ok, f"a platform with no silicon claim can still enrol an instance: {why}"
+    c, e = os.urandom(48), os.urandom(32)
+    ok2, why2 = m.present(TIK, c, e, Attester(a2, TIK).attest(c, e))
+    assert not ok2 and "not enrolled" in why2, "the stolen key on the other AWS machine is caught"
+    c, e = os.urandom(48), os.urandom(32)
+    assert m.present(TIK, c, e, Attester(a1, TIK).attest(c, e))[0]
 
-def test_masked_anchor_downgrade_is_explicit_and_logged():
-    z=MockTEE(ZERO); m=Mandate(mock_verifier({z.pub.hex()}), require_anchor=False)
-    a=Attester(z,TIK); e=os.urandom(32); t=os.urandom(48)
-    ok,why=m.present(TIK,t,e,a.attest(t,e))
-    assert ok, why
-    assert any(ev[0]=="anchor-absent-downgraded" for ev in m.log)
+def test_two_guests_on_one_socket_are_told_apart():
+    """The case a chip anchor cannot see: same silicon, different guest. In our own archive five
+    GCP chips each carried between two and four distinct REPORT_IDs."""
+    g1 = MockTEE(CHIP_A); g2 = MockTEE(CHIP_A)      # identical place, different instance
+    assert g1.chip == g2.chip and g1.instance != g2.instance
+    m = Mandate(mock_verifier({g1.pub.hex(), g2.pub.hex()}))
+    n = m.challenge(); m.enroll(TIK, g1.report(hashlib.sha512(n + CSR).digest()), n, CSR)
+    c, e = os.urandom(48), os.urandom(32)
+    ok, why = m.present(TIK, c, e, Attester(g2, TIK).attest(c, e))
+    assert not ok and "not enrolled" in why
+
+def test_place_can_be_pinned_separately_when_a_deployment_wants_it():
+    g = MockTEE(CHIP_A)
+    m = Mandate(mock_verifier({g.pub.hex()}), require_place=True)
+    n = m.challenge()
+    assert m.enroll(TIK, g.report(hashlib.sha512(n + CSR).digest()), n, CSR)[0]
+    c, e = os.urandom(48), os.urandom(32)
+    assert m.present(TIK, c, e, Attester(g, TIK).attest(c, e))[0]
+
+def test_requiring_a_place_refuses_a_platform_that_has_none():
+    z = MockTEE(ZERO)
+    m = Mandate(mock_verifier({z.pub.hex()}), require_place=True)
+    n = m.challenge()
+    ok, why = m.enroll(TIK, z.report(hashlib.sha512(n + CSR).digest()), n, CSR)
+    assert not ok and "place claim" in why
 
 # ---------------- audit regressions: an impostor cannot revoke the victim ----------------
 def test_impostor_cannot_revoke_the_victim():

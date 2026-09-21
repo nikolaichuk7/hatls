@@ -5,32 +5,50 @@ Both expose the same contract:
     tee.report(report_data: bytes[64]) -> evidence (dict)
     verify(evidence, expected_report_data) -> (ok: bool, anchor: bytes|None)
 
-`anchor` is the platform's instance identifier. It is None when the platform does not expose a
-usable one -- notably an all-zero SEV-SNP CHIP_ID, which is what a shared-tenancy VLEK-signed
-report carries. Measured on our own archive: six distinct AWS instances all report zeros, so a
-zero anchor is NOT an identity and must never be compared as if it were. The report itself is
-still valid; only the instance question is unanswerable.
+`anchor` is a dict with two separate claims, because they answer different questions and only one
+of them is identity:
+
+    {"instance": bytes, "place": bytes | None}
+
+`instance` answers "is this the same Target Environment?" On SEV-SNP that is REPORT_ID, which the
+AMD-SP generates per guest and which persists for that guest's lifetime (Firmware ABI 1.54: "The
+firmware generates a report ID for each guest that persists with the guest instance throughout its
+lifetime"). It is not an input to SNP_LAUNCH_START, so the hypervisor cannot choose it.
+
+`place` answers "which silicon?" That is CHIP_ID, and it is a weaker and different claim: two
+guests on one socket share it, and a shared-tenancy VLEK-signed report zeroes it. Measured on our
+own archive: six distinct AWS instances report an all-zero CHIP_ID -- and MASK_CHIP_KEY is clear in
+all of them -- while their REPORT_IDs are all distinct. Anchoring identity on CHIP_ID is therefore
+blind on that platform; anchoring on REPORT_ID is not.
+
+A missing `instance` fails closed. A missing `place` is normal and only matters to a deployment
+that asks for it (`Mandate(require_place=True)`).
 """
-def _usable_anchor(chip):
+def _present(v):
     """None for an absent/masked identifier, otherwise the identifier itself."""
-    return None if (chip is None or not any(chip)) else chip
+    return None if (v is None or not any(v)) else v
 import hashlib, os, json, base64, subprocess
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes, serialization
 
 # ---------- MockTEE: an ephemeral P-384 key stands in for the AMD SP ------------------
 class MockTEE:
-    def __init__(self, chip_id: bytes):
+    """A stand-in for one guest on one chip.
+
+    `instance` models REPORT_ID and defaults to a fresh random value, so two MockTEEs sharing a
+    `chip_id` are two guests on one socket -- the case a chip-anchored design cannot see."""
+    def __init__(self, chip_id: bytes, instance_id: bytes = None):
         self.chip = chip_id
+        self.instance = instance_id if instance_id is not None else os.urandom(32)
         self.k = ec.generate_private_key(ec.SECP384R1())
         self.pub = self.k.public_key().public_bytes(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
 
     def report(self, report_data: bytes):
-        body = self.chip + report_data
+        body = self.instance + self.chip + report_data
         sig = self.k.sign(body, ec.ECDSA(hashes.SHA384()))
-        return {"kind": "mock", "chip": self.chip.hex(), "report_data": report_data.hex(),
-                "pub": self.pub.hex(), "sig": sig.hex()}
+        return {"kind": "mock", "instance": self.instance.hex(), "chip": self.chip.hex(),
+                "report_data": report_data.hex(), "pub": self.pub.hex(), "sig": sig.hex()}
 
 def mock_verifier(trusted_pubs):
     """trusted_pubs: set of DER SPKI hex allowed to sign. Models the vendor-root trust."""
@@ -39,13 +57,14 @@ def mock_verifier(trusted_pubs):
         if ev["pub"] not in trusted_pubs: return False, None
         if bytes.fromhex(ev["report_data"]) != expected_rd: return False, None
         pub = serialization.load_der_public_key(bytes.fromhex(ev["pub"]))
-        chip = bytes.fromhex(ev["chip"])
+        chip = bytes.fromhex(ev["chip"]); inst = bytes.fromhex(ev["instance"])
         try:
-            pub.verify(bytes.fromhex(ev["sig"]), chip + bytes.fromhex(ev["report_data"]),
+            pub.verify(bytes.fromhex(ev["sig"]), inst + chip + bytes.fromhex(ev["report_data"]),
                        ec.ECDSA(hashes.SHA384()))
-            return True, _usable_anchor(chip)
         except Exception:
             return False, None
+        if _present(inst) is None: return True, None          # no instance claim: fail closed
+        return True, {"instance": inst, "place": _present(chip)}
     return verify
 
 # ---------- SevSnpTEE: real /dev/sev-guest via a helper on the guest ------------------
@@ -92,14 +111,18 @@ def parse_snp(b):
             "tcb": (tcb & 0xff, (tcb >> 8) & 0xff, (tcb >> 48) & 0xff, (tcb >> 56) & 0xff)}
 
 def snp_anchor(f):
-    """The instance anchor, or None when the platform does not expose one.
+    """{"instance": REPORT_ID, "place": CHIP_ID or None}, or None if there is no instance claim.
 
-    Two independent signals, because they do not agree in practice: the firmware can set
-    MASK_CHIP_KEY, and a platform can simply zero the field. Measured on our archive: 15 AWS
+    `place` uses two independent signals, because they do not agree in practice: the firmware can
+    set MASK_CHIP_KEY, and a platform can simply zero the field. Measured on our archive: 15 AWS
     shared-tenancy VLEK reports carry an all-zero CHIP_ID with MASK_CHIP_KEY *clear* -- the
     identifier is hidden without the flag that says so, so trusting the flag alone would hand back
-    64 zero bytes as if they were an identity."""
-    return None if (f["mask_chip_key"] or f["chip_id_zero"]) else f["chip_id"]
+    64 zero bytes as if they were an identity. Those same reports carry perfectly good REPORT_IDs,
+    which is why identity lives there and not here."""
+    inst = _present(f["report_id"])
+    if inst is None: return None
+    place = None if (f["mask_chip_key"] or f["chip_id_zero"]) else f["chip_id"]
+    return {"instance": inst, "place": place}
 
 def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark_sha256=None):
     """Verify a real 1184-byte report and appraise the platform it came from.
