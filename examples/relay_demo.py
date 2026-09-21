@@ -54,11 +54,20 @@ def _line(c):
     return b
 
 def _server_ctx(key_pem, cert_pem):
-    # pyOpenSSL takes cryptography objects directly; its own PKey/X509 wrappers are deprecated
-    # and warn, which is not what a first run of someone else's code should print.
+    """Works on both sides of a pyOpenSSL API change, and that is the whole point of the try.
+
+    Newer pyOpenSSL takes cryptography objects and deprecates its own PKey/X509 wrappers, warning
+    when you pass them; older pyOpenSSL raises TypeError unless you do. Choosing either one alone
+    means the repository runs for some people and not others -- which is exactly the failure this
+    release set out to remove, and it was caught only because this workstation carries the older
+    library while a fresh virtualenv installs the newer."""
     ctx=SSL.Context(SSL.TLS_METHOD); ctx.set_min_proto_version(SSL.TLS1_3_VERSION)
-    ctx.use_privatekey(serialization.load_pem_private_key(key_pem, None))
-    ctx.use_certificate(x509.load_pem_x509_certificate(cert_pem))
+    key=serialization.load_pem_private_key(key_pem, None)
+    cert=x509.load_pem_x509_certificate(cert_pem)
+    try: ctx.use_privatekey(key)
+    except TypeError: ctx.use_privatekey(crypto.PKey.from_cryptography_key(key))
+    try: ctx.use_certificate(cert)
+    except TypeError: ctx.use_certificate(crypto.X509.from_cryptography(cert))
     return ctx
 
 def guest_server(priv, key_pem, cert_pem, tee, conns, ready):

@@ -18,13 +18,15 @@ other chip is rejected on the first message, with no victim present.
 | 4 | Replays / reorders links **within** a legitimate session | **Continuity chain + counter** | detect, same message | yes — HATLS hw run, 21 Sep |
 | 5 | Relays a genuine session (holds the key) | **Exporter link** (post binder), derived by the verifier from its OWN session | detect, first post link | yes — `examples/relay_demo.py`, real TLS + real relay, in CI. v0.1's client read the exporter off the wire and accepted relays ([AUDIT.md](AUDIT.md) finding 1) |
 | 6 | **Physically on the enrolled chip** (insider / stolen live machine) | **Continuity liveness + place** | detect (interruption / location) | partially — beacon cadence measured at 7.96 ms, which bounds detection *resolution*, not the attacker's window |
-| 7 | Re-hosts on a platform that **exposes no instance anchor** (AWS shared-tenancy VLEK) | none — the guarantee does not exist there | **fails closed** | yes — 15 archived VLEK reports carry an all-zero `CHIP_ID` with `MASK_CHIP_KEY` clear ([AUDIT.md](AUDIT.md) finding 4) |
+| 7 | Re-hosts on a platform whose **silicon claim is masked** (AWS shared-tenancy VLEK) | **the instance anchor, `REPORT_ID`** — this is no longer a gap | prevent, first message | yes — live AWS run, two regions: `CHIP_ID` zeroed with `MASK_CHIP_KEY` clear and one VLEK key for the region, impostor still refused by the anchor |
+| 8 | Re-hosts on a platform with **no instance claim at all** | none — the question is undecidable there | **fails closed** | Intel TDX measured: two TDs from one image differ only in `MROWNER`, which the host supplies |
 
 Layers 2-5 either prevent the attack outright or catch it on the message that carries it. Layer 1
 is designed but not implemented here. Layer 6 — an adversary with physical control of the exact
 enrolled chip while it runs — survives; it is no longer a key-theft attack but physical possession
-of one specific machine. Layer 7 is not a defence at all: it is a platform where the central claim
-cannot be made, and the honest response is to refuse rather than to pretend.
+of one specific machine. Layer 7 used to be a gap and is now covered, because identity moved off
+the silicon claim and onto the instance claim. Layer 8 is not a defence at all: it is a platform
+where the question cannot be asked, and the honest response is to refuse rather than to pretend.
 
 Rejection targets the presenter. An impostor cannot revoke the identity it claims; revocation is an
 explicit operator act ([AUDIT.md](AUDIT.md) finding 3).

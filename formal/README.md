@@ -1,5 +1,12 @@
 # Formal model
 
+> **IN THE MODEL: the continuity binder and the mandate's appraisal of one step.**
+> **OUT OF THE MODEL: the transfer grant, revocation, the ledger, receipts, the hardware-witnessed
+> head, cross-mandate detection, and TLS itself.**
+>
+> Quote this line wherever the proof is mentioned. "HATLS has a formal model" is true and, without
+> it, misleading: what is proved is the binder, not the protocol.
+
 The review said it plainly: the tests show that the attacks we thought of are stopped, and say
 nothing about the ones we did not. This is the answer to that, and it is deliberately narrow.
 

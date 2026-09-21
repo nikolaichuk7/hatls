@@ -163,6 +163,15 @@ class Mandate:
         self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  ephemeral
         self._challenges = {}  # nonce -> expiry                                            ephemeral
         self.log = []
+        # The defaults are the SOFT ones: an in-process ledger and no enrolment requirement. That
+        # is a deliberate choice -- a store is a deployment decision and inventing one silently
+        # would be worse -- but it means the guarantee in force is weaker than the strongest this
+        # code can offer. It is recorded here so an audit of the log shows which was running,
+        # rather than leaving a reader to infer it from a constructor call they cannot see.
+        self._emit(("mandate-mode",
+                    "durable" if getattr(self.store, "durable", False) else "in-process",
+                    "enrolment-required" if require_enrolment else "enrolment-optional",
+                    "anchor-required" if require_anchor else "anchor-optional"))
 
     # ---- the durable ledger -------------------------------------------------------
     _BLANK = {"enrolled_instance": None, "enrolled_place": None,

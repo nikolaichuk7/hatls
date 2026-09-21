@@ -199,8 +199,11 @@ mandate accepts. This is an open item, stated rather than hidden.
   The head of that log was still the mandate's own word, so the head now goes into the hardware:
   the verifier hands its current head to the attester, the chip binds it into `REPORT_DATA`, and
   the mandate cannot mint a report claiming a different ledger state because the signing key is the
-  chip's. Verified on live SEV-SNP.
-- **Two mandates over one identity: divergence is detected, not prevented.** Preventing it needs
+  chip's. Verified on live SEV-SNP. The limit of that: it stops a mandate **lying later**, not a
+  mandate and a guest **colluding at the time** — between them they choose the head, and the chip
+  signs what it is given. The property bites once the report has left their joint control.
+- **Two mandates over one identity: divergence is detected, not prevented — this is not a
+  federation.** There is no shared state and nothing coordinates the two. Preventing it needs
   consensus, with the availability price that implies. Detecting it needs only that the two claims
   meet somewhere — and there is a channel here that Certificate Transparency does not have, where
   gossip between clients is the unsolved part. **The attester is the gossip.** Both mandates
@@ -220,9 +223,9 @@ mandate accepts. This is an open item, stated rather than hidden.
   workload — so **it must not live inside the attested VM**, or the "owner" is the same process an
   attacker has already taken. There is no k-of-n and no recovery path for a lost authority.
   Three more limits of the grant, stated rather than discovered: it names **instances**, so it can
-  only move what the mandate can identify; it is only valid at the mandate holding that enrolment,
-  because nonces are consumed locally and nothing stops the same grant being shown to a second,
-  independent mandate; and `nbf`/`exp` are the issuer's clock, which makes the window an
+  only move what the mandate can identify; it carries **no mandate identifier at all**, so a second,
+  independent mandate holding the same enrolment would accept the very same grant — spent nonces
+  live in one process and nothing binds a grant to the mandate that issued the challenge; and `nbf`/`exp` are the issuer's clock, which makes the window an
   operational bound and not a cryptographic one. The signed bytes are canonical JSON, which is
   adequate here and is **not** an interoperable encoding — a specification would use COSE.
 - **Identity is the instance claim, not the silicon.** HATLS anchors on SEV-SNP `REPORT_ID`, which
@@ -254,7 +257,9 @@ mandate accepts. This is an open item, stated rather than hidden.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
   launcher deliberately ships one key to two guests, which is the stolen-key model this repository
   demonstrates against.
-- **The binder and the mandate are machine-proved; the rest is not.** ProVerif 2.05 proves, against
+- **The binder and the mandate's appraisal of one step are machine-proved. The rest is not.**
+  Out of the model: the transfer grant, revocation, the ledger, receipts, the hardware-witnessed
+  head, cross-mandate detection, and TLS. ProVerif 2.05 proves, against
   a Dolev-Yao attacker with the identity key handed to it in the clear and unboundedly many
   parallel sessions, that anything the mandate accepts was attested by that instance for the
   exporter the mandate derived itself, by the instance it enrolled, and under the session it was
