@@ -98,7 +98,8 @@ distribution service. Delete the VMs when done (the scripts remind you).
       │  public, early      │  shared secret, ordered    │  each bound to the chip by a
       └─── Camp 1 ──────────┴─── Camp 2 ─────────────────┘   real hardware attestation report
 
-  Mandate (a shared, append-only authority over an identity, like a transparency log):
+  Mandate (a shared authority over an identity -- in this prototype an in-process store,
+  NOT an append-only log: no receipts, no Merkle tree, no independent auditor):
     • enrolment  : the chip signs "this key was born on me"  → wrong chip blocked on first message
     • continuity : each link must chain from the last         → replay / relay / splice caught
     • instance anchor: the identity must stay on its instance  → re-hosting caught, impostor refused
