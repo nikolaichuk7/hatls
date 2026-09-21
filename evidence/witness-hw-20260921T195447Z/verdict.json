@@ -1,0 +1,6 @@
+{
+ "witnessed_accepted": true,
+ "receipt_ok": true,
+ "auditor_confirms_head": true,
+ "rewrite_detectable": true
+}

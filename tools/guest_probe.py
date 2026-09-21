@@ -12,6 +12,9 @@ and requests a real VCEK-signed SEV-SNP report with
 
 so the hardware itself binds each link.
 
+If the verifier sends a `head`, the report binds it too, so the chip witnesses the ledger state
+the verifier claimed at that moment.
+
 IMPORTANT (changed after the 21 Sep 2026 audit): this probe no longer accepts a transcript from
 the client, and no longer sends its exporter or its public key on the wire. Both endpoints derive
 the binding values independently from their own side of the TLS session, and the verifier takes
@@ -36,8 +39,11 @@ def intra_link(th, tik_pub):
     return hkdf_expand_label(base,b"attestation",hashlib.sha384(tik_pub).digest(),32)
 def post_link(exp,prev,counter):
     return hkdf_expand_label(exp,b"continuity",prev+counter.to_bytes(8,"big"),32)
-def report_data_for(link):
-    return hashlib.sha512(b"HATLS-continuity-v0"+link).digest()
+def report_data_for(link, head=None):
+    """With a head, the chip also commits to the ledger state the verifier claimed. The verifier
+    cannot forge that witness afterwards, because the signature is the chip's, not its own."""
+    if head is None: return hashlib.sha512(b"HATLS-continuity-v0"+link).digest()
+    return hashlib.sha512(b"HATLS-continuity-v1"+link+head).digest()
 
 class Req(ctypes.Structure):  _fields_=[("user_data",ctypes.c_ubyte*64),("vmpl",ctypes.c_uint32),("flags",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24)]
 class Resp(ctypes.Structure): _fields_=[("status",ctypes.c_uint32),("report_size",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24),("report",ctypes.c_ubyte*4000)]
@@ -90,18 +96,20 @@ def main():
                 except Exception: pass
                 s.close(); continue
             steps=int(req.get("steps",3))
+            head=bytes.fromhex(req["head"]) if req.get("head") else None
             exp=conn.export_keying_material(EXPORTER_LABEL,32,b"")
             sc =conn.export_keying_material(CONTEXT_LABEL,48,b"")      # derived, never received
             chain=[]; prev=intra_link(sc,tik_pub)
             for counter in range(steps):
                 pl=post_link(exp,prev if counter else intra_link(sc,tik_pub),counter)
-                rep=snp_report(report_data_for(pl))
+                rep=snp_report(report_data_for(pl,head))
                 open(f"conn{n:02d}-c{counter}-report.bin","wb").write(rep)
                 chain.append({"counter":counter,"post_link":pl.hex(),"report":base64.b64encode(rep).decode()})
                 prev=pl
             # NOTE: the exporter and the identity key are deliberately NOT sent. The verifier
             # derives the first from its own session and reads the second from the certificate.
-            blob=json.dumps({"instance":iid,"zone":zone,"chain":chain}).encode()
+            blob=json.dumps({"instance":iid,"zone":zone,"chain":chain,
+                             "head":head.hex() if head else None}).encode()
             conn.sendall(struct.pack(">I",len(blob))+blob)
             json.dump(json.loads(blob),open(f"conn{n:02d}.json","w"))
             print(f"conn {n}: chain of {steps} links emitted, exporter {exp.hex()[:16]}",flush=True)

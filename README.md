@@ -183,10 +183,16 @@ mandate accepts. This is an open item, stated rather than hidden.
   instead of a downgrade, so a wiped ledger fails closed. `examples/attack.py restart` shows the
   default and both fixes side by side. Session chains are deliberately **not** stored: a connection
   dies with the process and the next one starts its own chain.
-- **The mandate is still a single trusted component.** It is not replicated, it issues no receipts,
-  and nothing lets a third party audit its answers after the fact — so it is not the transparency
-  service the vocabulary of SCITT would imply. It is also absent from the threat model: what a
-  relying party may still decide when the mandate is unavailable, or lying, is unspecified.
+- **The mandate is trusted, and now at least accountable.** Every decision is a leaf in an
+  append-only Merkle log and comes back as a receipt — entry, inclusion proof and signed tree head
+  — so it can no longer deny what it said or claim what it did not. A consistency proof between two
+  heads stops it rewriting its past. Equivocation it cannot be *prevented* from committing, only
+  proved: two heads it signed where neither extends the other are the evidence.
+  The head of that log was still the mandate's own word, so the head now goes into the hardware:
+  the verifier hands its current head to the attester, the chip binds it into `REPORT_DATA`, and
+  the mandate cannot mint a report claiming a different ledger state because the signing key is the
+  chip's. Verified on live SEV-SNP. It is still **one** component: not replicated, and what a
+  relying party may decide when it is unavailable is unspecified.
 - **A disputed identity is resolved by its owner, not by the mandate — and that is a new key to
   protect.** Two instances presenting genuine evidence for one identity cannot be told apart by
   looking harder: a thief and an operator recovering a dead machine produce identical reports. So
