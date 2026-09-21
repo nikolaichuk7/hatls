@@ -25,7 +25,8 @@ This module is transport- and TEE-agnostic. The TEE is injected: `tee.report(rep
 signed Evidence; `verify_report(evidence, expected_report_data) -> (ok, anchor)` checks it, where
 `anchor` is None when the platform exposes no usable instance identifier.
 """
-import hashlib, hmac
+import hashlib, hmac, time
+from .store import MemoryStore
 
 # ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
@@ -92,39 +93,105 @@ class NoAnchor(Exception):
 class Mandate:
     """Admits one continuous, ordered, anchor-consistent chain per identity.
 
-    require_anchor=True (the default) is the safe setting: a platform that cannot name its own
-    instance is refused rather than silently accepted. Setting it False degrades the mandate to
-    ordering-and-freshness only: replay and relay are still caught, RE-HOSTING IS NOT. The mandate
-    records that downgrade in its log so an auditor can see which guarantee was actually in force.
+    Three settings decide what is actually guaranteed, and all three are explicit on purpose.
+
+    `require_anchor=True` (default) refuses a platform that cannot name its own instance, rather
+    than silently accepting one. `require_anchor=False` degrades to ordering and freshness only:
+    replay and relay are still caught, RE-HOSTING IS NOT.
+
+    `require_enrolment=False` (default) lets an identity be served with no enrolment on record, in
+    which case a second instance is recorded as contention rather than refused. `True` refuses any
+    identity the ledger does not know. Set it wherever the enrolment gate is the guarantee you are
+    relying on: without it, an empty ledger and a deliberately unenrolled identity look identical.
+
+    `store` holds the ledger -- enrolment, revocation, contention. The default `MemoryStore` is NOT
+    durable, so a restart loses it. Pass a `FileStore` for a mandate whose answers must survive the
+    process. Session chains are deliberately not stored: a connection dies with the process, and
+    the next one starts its own chain.
+
+    The mandate itself is trusted, and is not part of the threat model in docs/THREAT-MODEL.md.
     """
-    def __init__(self, verify_report, require_anchor=True):
+    def __init__(self, verify_report, require_anchor=True, require_enrolment=False,
+                 store=None, challenge_ttl=300):
         self.verify_report = verify_report
         self.require_anchor = require_anchor
-        self.identity = {}     # tik_pub_hex -> {"anchor":.., "revoked":bool}      the ledger
-        self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  the chains
-        self.enrolled = {}     # tik_pub_hex -> anchor   (which instance this key was born on)
-        self.contention = {}   # tik_pub_hex -> [reasons]  (evidence of a dispute, not a verdict)
-        self._challenges = set()
+        self.require_enrolment = require_enrolment
+        self.store = store if store is not None else MemoryStore()
+        self.challenge_ttl = challenge_ttl
+        self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  ephemeral
+        self._challenges = {}  # nonce -> expiry                                            ephemeral
         self.log = []
+
+    # ---- the durable ledger -------------------------------------------------------
+    _BLANK = {"enrolled_anchor": None, "observed_anchor": None,
+              "revoked": False, "reason": None, "contention": []}
+
+    def _rec(self, k):
+        r = self.store.get(k)
+        return dict(self._BLANK) if r is None else {**self._BLANK, **r}
+
+    def _save(self, k, rec): self.store.put(k, rec)
+
+    @property
+    def durable(self): return getattr(self.store, "durable", False)
+
+    @property
+    def enrolled(self):
+        out = {}
+        for k in self.store.keys():
+            a = (self.store.get(k) or {}).get("enrolled_anchor")
+            if a: out[k] = bytes.fromhex(a)
+        return out
+
+    @property
+    def identity(self):
+        out = {}
+        for k in self.store.keys():
+            r = self.store.get(k) or {}
+            a = r.get("observed_anchor")
+            out[k] = {"anchor": bytes.fromhex(a) if a else None, "revoked": r.get("revoked", False)}
+        return out
+
+    @property
+    def contention(self):
+        out = {}
+        for k in self.store.keys():
+            c = (self.store.get(k) or {}).get("contention") or []
+            if c: out[k] = c
+        return out
 
     def _emit(self, ev): self.log.append(ev)
 
-    # ---- challenge/response: the mandate picks the nonce, so enrolment cannot be replayed ----
+    def _dispute(self, k, reason):
+        rec = self._rec(k); rec["contention"] = (rec["contention"] + [reason])[-64:]
+        self._save(k, rec)
+
+    # ---- challenge/response: the mandate picks the nonce, and it expires ----
     def challenge(self):
         import os as _os
-        n = _os.urandom(32); self._challenges.add(n); return n
+        n = _os.urandom(32)
+        now = time.time()
+        self._challenges = {x: e for x, e in self._challenges.items() if e > now}   # drop stale
+        self._challenges[n] = now + self.challenge_ttl
+        return n
 
     def enroll(self, tik_pub, enroll_evidence, nonce, csr_der):
         """One-time: bind an identity key to the instance it was born on.
 
-        Requires (a) a nonce this mandate issued and has not yet spent, (b) a CSR that carries
+        Requires (a) a nonce this mandate issued, unspent and unexpired, (b) a CSR that carries
         EXACTLY tik_pub and is self-signed by its private half, (c) a TEE report over
         SHA-512(nonce || CSR) from a platform with a usable anchor. First write wins."""
         k = tik_pub.hex()
-        if nonce not in self._challenges:
+        expiry = self._challenges.get(nonce)
+        if expiry is None:
             self._emit(("enroll-rejected", k[:16], "stale or unissued nonce"))
             return False, "nonce was not issued by this mandate (replay)"
-        if k in self.enrolled:
+        if expiry <= time.time():
+            del self._challenges[nonce]
+            self._emit(("enroll-rejected", k[:16], "nonce expired"))
+            return False, "nonce expired"
+        rec = self._rec(k)
+        if rec["enrolled_anchor"] is not None:
             self._emit(("enroll-rejected", k[:16], "already enrolled"))
             return False, "identity already enrolled; re-enrolment is an operator action"
         try:
@@ -144,20 +211,19 @@ class Mandate:
             self._emit(("enroll-rejected", k[:16], "platform exposes no instance anchor"))
             return False, ("platform exposes no usable instance anchor (masked CHIP_ID): "
                            "continuity-to-an-instance cannot be enrolled here")
-        self._challenges.discard(nonce)
-        self.enrolled[k] = anchor
+        del self._challenges[nonce]
+        rec["enrolled_anchor"] = anchor.hex()
+        self._save(k, rec)
         self._emit(("enrolled", k[:16], anchor.hex()[:12]))
         return True, "enrolled"
 
     def revoke(self, tik_pub, reason="operator"):
         """Explicit, deliberate revocation. Nothing an unauthenticated presenter does reaches here."""
         k = tik_pub.hex()
-        self.identity.setdefault(k, {"anchor": None, "revoked": False})["revoked"] = True
+        rec = self._rec(k); rec["revoked"] = True; rec["reason"] = reason
+        self._save(k, rec)
         self._emit(("revoked", k[:16], reason))
         return True, f"identity revoked: {reason}"
-
-    def _dispute(self, k, reason):
-        self.contention.setdefault(k, []).append(reason)
 
     def present(self, tik_pub, session_context, exporter, msg):
         """Appraise one attestation step.
@@ -168,14 +234,14 @@ class Mandate:
 
         There is no `new_session` flag. Which chain a step belongs to is DERIVED from the session
         context, so the caller cannot assert its way past the counter. Continuity is tracked per
-        connection, which is what lets one identity hold several sessions at once; the identity
-        ledger -- anchor, enrolment, revocation -- is shared across all of them.
+        connection; the ledger -- anchor, enrolment, revocation, contention -- is per identity and
+        may be durable.
 
         Returns (accepted, reason). A rejected presenter never revokes the identity it claims."""
         k = tik_pub.hex()
         skey = hashlib.sha256(session_context).hexdigest()[:32]
-        ident = self.identity.get(k)
-        if ident and ident["revoked"]:
+        rec = self._rec(k)
+        if rec["revoked"]:
             self._emit(("declined-revoked", k[:16], msg["counter"]))
             return False, "identity revoked"
 
@@ -196,10 +262,19 @@ class Mandate:
                                "undecidable here (set require_anchor=False to accept that)")
             self._emit(("anchor-absent-downgraded", k[:16], msg["counter"]))
 
-        # 1b) ENROLMENT GATE. Evidence from any instance other than the enrolled one is an
+        enrolled_anchor = bytes.fromhex(rec["enrolled_anchor"]) if rec["enrolled_anchor"] else None
+
+        # 1b) NO SILENT DOWNGRADE. An empty ledger and a deliberately unenrolled identity look the
+        #     same from here, so a deployment that relies on the enrolment gate must say so: a lost
+        #     or wiped ledger then refuses service instead of quietly reverting to the weaker mode.
+        if enrolled_anchor is None and self.require_enrolment:
+            self._emit(("declined-not-enrolled", k[:16], msg["counter"]))
+            return False, ("identity has no enrolment on record and this mandate requires one "
+                           "(a lost ledger must not silently downgrade the guarantee)")
+
+        # 1c) ENROLMENT GATE. Evidence from any instance other than the enrolled one is an
         #     impostor, rejected on its FIRST message. We know which instance is legitimate, so we
         #     reject the PRESENTER and leave the victim's identity untouched.
-        enrolled_anchor = self.enrolled.get(k)
         if enrolled_anchor is not None and anchor is not None and anchor != enrolled_anchor:
             self._dispute(k, "evidence from a non-enrolled instance")
             self._emit(("rejected-impostor", k[:16], enrolled_anchor.hex()[:12], anchor.hex()[:12], msg["counter"]))
@@ -207,9 +282,10 @@ class Mandate:
 
         # 2) Without enrolment we cannot tell owner from thief, so we protect the incumbent and
         #    record a dispute. We do NOT destroy the identity on an unauthenticated claim.
-        if ident and anchor is not None and ident["anchor"] is not None and anchor != ident["anchor"]:
+        observed = bytes.fromhex(rec["observed_anchor"]) if rec["observed_anchor"] else None
+        if observed is not None and anchor is not None and anchor != observed:
             self._dispute(k, "second instance under one identity")
-            self._emit(("contention-anchor", k[:16], ident["anchor"].hex()[:12], anchor.hex()[:12], msg["counter"]))
+            self._emit(("contention-anchor", k[:16], observed.hex()[:12], anchor.hex()[:12], msg["counter"]))
             return False, ("continuity contention: a second instance claims this identity "
                            "(no enrolment on record, so the mandate refuses to pick a winner)")
 
@@ -235,7 +311,8 @@ class Mandate:
             return False, "link does not chain (relay, replay or a foreign session)"
 
         self.sessions[(k, skey)] = {"prev": pl, "counter": msg["counter"]}
-        self.identity[k] = {"anchor": anchor if anchor is not None else (ident or {}).get("anchor"),
-                            "revoked": False}
+        if anchor is not None:
+            rec["observed_anchor"] = anchor.hex()
+            self._save(k, rec)
         self._emit(("accept", k[:16], skey[:8], msg["counter"], (anchor or b"").hex()[:12]))
         return True, "accepted; continuity intact"

@@ -175,12 +175,22 @@ mandate accepts. This is an open item, stated rather than hidden.
   `CHIP_ID`, so re-hosting between VMs on one physical machine is invisible; a guest migrated to
   another socket reads as a fork. That is the ceiling of the claim we chose, not a bug we can
   patch — see the open question below.
-- **The mandate is in-process and does not survive a restart.** `challenge()` nonces, the enrolment
-  records and the ledger all live in memory. A restart invalidates outstanding nonces and, worse,
-  **loses the enrolment records — which silently downgrades an enrolled identity to the weaker
-  no-enrolment mode**. `examples/attack.py restart` demonstrates it. Durable, replicated mandate
-  state with a resolution procedure for contention is the next significant piece of work, and it is
-  operational semantics rather than channel cryptography.
+- **The mandate's ledger is durable only if you give it a store.** The default `MemoryStore` keeps
+  enrolment, revocation and contention in memory, so a restart loses them — and a lost ledger is
+  indistinguishable from an identity that was never enrolled, which would quietly downgrade the
+  guarantee. Two independent fixes exist and both are one argument: `store=FileStore(path)` makes
+  the ledger survive the process, and `require_enrolment=True` makes an unknown identity a refusal
+  instead of a downgrade, so a wiped ledger fails closed. `examples/attack.py restart` shows the
+  default and both fixes side by side. Session chains are deliberately **not** stored: a connection
+  dies with the process and the next one starts its own chain.
+- **The mandate is still a single trusted component.** It is not replicated, it issues no receipts,
+  and nothing lets a third party audit its answers after the fact — so it is not the transparency
+  service the vocabulary of SCITT would imply. It is also absent from the threat model: what a
+  relying party may still decide when the mandate is unavailable, or lying, is unspecified.
+- **Contention is recorded but never resolved.** Refusing to revoke on an unauthenticated claim
+  removed an availability attack; it did not say who adjudicates a dispute, on what evidence, or
+  within what bound. That is the next piece of work, and it is operational semantics rather than
+  channel cryptography.
 - **No instance anchor on some platforms.** Re-host detection rests on the SEV-SNP `CHIP_ID`. Under
   a shared-tenancy VLEK that field is **all zeros**: in our own archive, six distinct AWS instances
   report the same 64 zero bytes, and the firmware does *not* set `MASK_CHIP_KEY` to say so. On such

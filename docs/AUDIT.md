@@ -205,13 +205,11 @@ succeeds on three distinct live chips; a single flipped `MEASUREMENT` byte is re
 - Live migration to another socket still reads as a fork; the fix is a platform-signed migration
   statement the mandate accepts.
 - Sealing the identity key to its chip.
-- **The mandate is trusted, in-process, and does not survive a restart.** `challenge()` nonces,
-  enrolment records and the ledger are all in memory. A restart invalidates outstanding nonces and
-  loses the enrolment records, which **silently downgrades an enrolled identity to the weaker
-  no-enrolment mode** — an impostor blocked a moment ago is accepted afterwards. Demonstrated by
-  `examples/attack.py restart` and pinned by two tests that assert the weakness on purpose, so it
-  cannot be quietly forgotten. Durable, replicated state, an audit trail, and what a relying party
-  may still decide when the mandate is unavailable or lying, are all unaddressed.
+- **The mandate is trusted and unmodelled.** Durability is now available — `FileStore` keeps the
+  ledger across a restart, and `require_enrolment=True` turns a lost ledger into a refusal rather
+  than a silent downgrade — but the mandate is still a single component: not replicated, issuing no
+  receipts, and unauditable after the fact by anyone else. What a relying party may decide when the
+  mandate is unavailable or lying remains unspecified.
 - **Contention is recorded but never resolved.** Refusing to revoke on an unauthenticated claim
   removed an availability attack; it did not say who adjudicates the dispute, on what evidence, or
   within what bound. This and the previous item are operational semantics rather than channel
