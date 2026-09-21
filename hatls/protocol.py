@@ -29,14 +29,20 @@ import hashlib, hmac, time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from .store import MemoryStore
-from .transfer import canonical, verify_grant, GRANT_VERSION
+from .transfer import (canonical, verify_grant, GRANT_VERSION,
+                        verify_enrolment_authorisation)
 from .log import MerkleLog
 from . import receipt as _receipt
 from . import federation as _fed
 
-# ---------- binder maths (RFC 8446 HKDF-Expand-Label shape) --------------------------
+# ---------- binder maths ------------------------------------------------------------
+# The SHAPE is RFC 8446 HKDF-Expand-Label, because it is a good shape. The LABEL SPACE is not:
+# "tls13 " belongs to TLS 1.3, these are not TLS secrets -- intra_link starts from 48 zero bytes,
+# which is not a key schedule secret at all -- and squatting another protocol's namespace is how
+# two specifications end up deriving the same bytes for different purposes. Our labels live under
+# a prefix of our own, and it is marked EXPERIMENTAL because nothing here is registered with IANA.
 def _hkdf_expand_label(secret, label, ctx, n=32, H=hashlib.sha384):
-    full = b"tls13 " + label
+    full = b"EXPERIMENTAL-hatls " + label
     info = n.to_bytes(2,"big") + bytes([len(full)]) + full + bytes([len(ctx)]) + ctx
     out=t=b""; i=1
     while len(out)<n:
@@ -135,7 +141,7 @@ class Mandate:
     """
     def __init__(self, verify_report, require_anchor=True, require_enrolment=False,
                  require_place=False, store=None, challenge_ttl=300, witness_ttl=3600,
-                 signing_key=None):
+                 signing_key=None, enrolment_authority=None):
         self.verify_report = verify_report
         # the key the mandate signs its own tree heads with. An ephemeral one makes receipts
         # unverifiable after a restart, so a durable deployment must supply a real one.
@@ -149,6 +155,9 @@ class Mandate:
         self.require_enrolment = require_enrolment
         self.require_place = require_place
         self.witness_ttl = witness_ttl
+        # who may create identities here. None means anybody may, which closes re-enrolment but
+        # not the race to be first -- see hatls.transfer.make_enrolment_authorisation.
+        self.enrolment_authority = enrolment_authority
         self.store = store if store is not None else MemoryStore()
         self.challenge_ttl = challenge_ttl
         self.sessions = {}     # (tik_pub_hex, session_key) -> {"prev":.., "counter":int}  ephemeral
@@ -279,7 +288,8 @@ class Mandate:
         self._challenges[n] = now + self.challenge_ttl
         return n
 
-    def _enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
+    def _enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None,
+                authorisation=None, authorisation_sig=None):
         """One-time: bind an identity key to the instance it was born on.
 
         Requires (a) a nonce this mandate issued, unspent and unexpired, (b) a CSR that carries
@@ -298,6 +308,16 @@ class Mandate:
             del self._challenges[nonce]
             self._emit(("enroll-rejected", k[:16], "nonce expired"))
             return False, "nonce expired"
+        if self.enrolment_authority is not None:
+            if authorisation is None or authorisation_sig is None:
+                self._emit(("enroll-rejected", k[:16], "no enrolment authorisation"))
+                return False, ("this mandate enrols only what its enrolment authority has "
+                               "permitted, and no authorisation was offered")
+            aok, awhy = verify_enrolment_authorisation(self.enrolment_authority, authorisation,
+                                                       authorisation_sig, tik_pub, nonce)
+            if not aok:
+                self._emit(("enroll-rejected", k[:16], "bad enrolment authorisation"))
+                return False, awhy
         rec = self._rec(k)
         if rec["enrolled_instance"] is not None:
             self._emit(("enroll-rejected", k[:16], "already enrolled"))
@@ -332,9 +352,11 @@ class Mandate:
                     "transferable" if transfer_authority is not None else "fixed"))
         return True, "enrolled"
 
-    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None):
+    def enroll(self, tik_pub, enroll_evidence, nonce, csr_der, transfer_authority=None,
+               authorisation=None, authorisation_sig=None):
         """Bind an identity to its instance, and record the decision. See `_enroll`."""
-        ok, why = self._enroll(tik_pub, enroll_evidence, nonce, csr_der, transfer_authority)
+        ok, why = self._enroll(tik_pub, enroll_evidence, nonce, csr_der, transfer_authority,
+                               authorisation, authorisation_sig)
         inst = self._rec(tik_pub.hex())["enrolled_instance"] if ok else None
         self._record("enroll", tik_pub, ok, why, bytes.fromhex(inst) if inst else None)
         return ok, why

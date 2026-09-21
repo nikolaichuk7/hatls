@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authorised transfer: how a disputed identity is resolved, and how a legitimate one moves.
+"""Authority-signed permissions: who may create an identity here, and who may move one.
 
 Recording contention was the right primitive and the wrong stopping point. A mandate that sees two
 instances claiming one identity cannot settle the question by looking harder at either of them:
@@ -81,3 +81,41 @@ def verify_grant(authority_spki_der, grant, signature):
     pub = serialization.load_der_public_key(authority_spki_der)
     pub.verify(signature, canonical(grant), ec.ECDSA(hashes.SHA256()))
     return True
+
+
+# ---- enrolment authorisation: who is allowed to create an identity on this mandate ----
+def make_enrolment_authorisation(authority_key, tik_pub, nonce, valid_for=900, now=None):
+    """Permission for ONE enrolment of ONE identity against ONE challenge.
+
+    First-write-wins closes re-enrolment but not the race to be first: on a mandate that will
+    enrol anybody, an attacker who reaches it before the rightful owner simply owns the identity,
+    and every later guarantee is then working perfectly on behalf of the wrong party. A mandate
+    configured with an enrolment authority refuses enrolments that this key has not permitted.
+
+    The permission is bound to the mandate's own challenge nonce, so it cannot be collected and
+    replayed against a later enrolment attempt."""
+    now = int(time.time() if now is None else now)
+    body = {"v": GRANT_VERSION, "kind": "enrol",
+            "tik": tik_pub.hex(), "nonce": nonce.hex(),
+            "nbf": now, "exp": now + int(valid_for)}
+    signature = authority_key.sign(canonical(body), ec.ECDSA(hashes.SHA256()))
+    return body, signature
+
+def verify_enrolment_authorisation(authority_spki_der, body, signature, tik_pub, nonce):
+    """Returns (ok, reason)."""
+    if not isinstance(body, dict) or body.get("v") != GRANT_VERSION or body.get("kind") != "enrol":
+        return False, "unsupported enrolment authorisation"
+    if body.get("tik") != tik_pub.hex():
+        return False, "enrolment authorisation is for a different identity"
+    if body.get("nonce") != nonce.hex():
+        return False, "enrolment authorisation is for a different challenge"
+    now = int(time.time())
+    if not (int(body.get("nbf", 0)) <= now <= int(body.get("exp", 0))):
+        return False, ("enrolment authorisation is outside its validity window "
+                       "(times are the issuer's clock; allow for skew)")
+    try:
+        pub = serialization.load_der_public_key(authority_spki_der)
+        pub.verify(signature, canonical(body), ec.ECDSA(hashes.SHA256()))
+    except Exception:
+        return False, "enrolment authorisation is not signed by this mandate's enrolment authority"
+    return True, "authorised"
