@@ -125,5 +125,28 @@ line(*m.present(TIK, c, e, Attester(teeA,TIK).attest(c,e)))
 print("   reusing the same grant a second time:")
 line(*m.accept_transfer(TIK, grant, sig))
 
+print("\n=== 11. TWO MANDATES, ONE ATTESTATION: divergence becomes evidence ===")
+from hatls import federation as F, receipt as RC
+vv = mock_verifier({teeA.pub.hex()})
+mA, mB = Mandate(vv), Mandate(vv)
+for mm in (mA, mB):
+    nn = mm.challenge()
+    mm.enroll(TIK, teeA.report(hashlib.sha512(nn+CSR).digest()), nn, CSR)
+commitment, entries = F.make_bundle([(mA.public_key, mA.sth()), (mB.public_key, mB.sth())])
+c, e = sess()
+msg = Attester(teeA, TIK).attest(c, e, head=commitment)
+print(f"   one report carries both heads: {[x['m'][:8] for x in entries]}")
+print("   mandate A accepts:"); line(*mA.present(TIK, c, e, msg, head=commitment, bundle=entries))
+print("   mandate B accepts:"); line(*mB.present(TIK, c, e, msg, head=commitment, bundle=entries))
+witnessed = F.entry_for(entries, mA.public_key)
+mA.merkle.entries = [RC.make_entry("present", TIK, True, "a different history", seq=0)]
+mA._roots = {mA.merkle.head().hex(): 1}
+try: proof = mA.prove_extension(witnessed["size"])
+except Exception: proof = None
+diverged, why = F.divergence(mA.public_key, witnessed["size"], witnessed["root"], mA.sth(), proof)
+print(f"   A then rewrites its log -> diverged={diverged}")
+print(f"     {why}")
+print("   (neither mandate trusted the other, and no consensus ran)")
+
 print("\n--- mandate audit log (scenario 8) ---")
 for ev in m.log: print("   ", ev)

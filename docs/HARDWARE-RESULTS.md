@@ -9,6 +9,45 @@
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
 
+# Run of 21 September 2026, 20:02 UTC — two mandates reconciled through the attester
+
+`examples/federation_hw.py`, one SEV-SNP guest in `europe-west4-b`, instance `966b8530389a69d1`,
+deleted after the run. Evidence: `evidence/federation-hw-20260921T200251Z/`.
+
+Preventing two mandates from diverging needs consensus. Detecting it needs only that their claims
+meet somewhere, and in Certificate Transparency that meeting -- gossip -- is the unsolved part.
+Here both mandates already trust the same TEE, so one report carries both their heads at once.
+
+```
+mandate A (799f6f0b): enrolled       mandate B (fc4f2543): enrolled
+both anchored on instance 966b8530389a69d1
+
+bundle bound by the guest: [(799f6f0b, size 1, bbb3bd1a8a75), (fc4f2543, size 1, bbb3bd1a8a75)]
+commitment: 8beada28e07e35979a2b45a1
+
+mandate A accepts: True      mandate B accepts: True
+
+REPORT_DATA signed by AMD  : 39fc11d7f3dcd2783546cf86d15d9d5e
+rebuilt from link + bundle : 39fc11d7f3dcd2783546cf86d15d9d5e
+a tampered bundle would match: False
+
+after A rewrites its log -> diverged=True
+  same size, different root: the peer signed two histories
+```
+
+Re-checked offline from the archived files alone. The two roots coincide here only because both
+logs held the same single decision at that moment; the mandates are distinguished by the key each
+signs with, which is what the bundle names.
+
+What this run shows: two independent mandates, neither trusting the other and neither online for
+the other, whose claims are pinned together inside one AMD-signed report; and a mandate that
+rewrites afterwards being caught with that report alone.
+
+What it does not show: prevention. Two mandates can still admit different instances. What is bought
+is that doing so leaves a mark the party who did it cannot remove.
+
+---
+
 # Run of 21 September 2026, 19:54 UTC — the chip as a witness to the mandate's ledger
 
 `examples/witness_hw.py`, one SEV-SNP guest in `europe-west4-b`, instance `a41b810b4e16c826`,
