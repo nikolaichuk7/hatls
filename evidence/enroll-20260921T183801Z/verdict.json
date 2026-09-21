@@ -1,0 +1,25 @@
+{
+ "impostor_blocked_first_message": true,
+ "victim_accepted": true,
+ "log": [
+  [
+   "enrolled",
+   "3059301306072a86",
+   "dd92cae137e7"
+  ],
+  [
+   "rejected-impostor",
+   "3059301306072a86",
+   "dd92cae137e7",
+   "15f90cb08862",
+   "0"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "59f3c725",
+   "0",
+   "dd92cae137e7"
+  ]
+ ]
+}

@@ -18,8 +18,8 @@ from hatls.tee import sevsnp_verifier
 from hatls.client import HatlsClient
 
 def as_evidence(step):
-    return {"counter": step["counter"], "post_link": step["post_link"]
-            "evidence": {"kind":"sev-snp", "report": step["report"]
+    return {"counter": step["counter"], "post_link": step["post_link"],
+            "evidence": {"kind": "sev-snp", "report": step["report"],
                          "report_data": report_data_for(bytes.fromhex(step["post_link"])).hex()}}
 
 def run(m, ip, label, steps, results, out=None):
@@ -52,8 +52,8 @@ def main():
 
     print("\n--- mandate audit log ---")
     for e in m.log: print("   ", e)
-    verdict = {"impostor_rejected": okB is False, "victim_still_serving": okA2 is True
-               "contention_recorded": {k: v for k, v in m.contention.items()}
+    verdict = {"impostor_rejected": okB is False, "victim_still_serving": okA2 is True,
+               "contention_recorded": {k: v for k, v in m.contention.items()},
                "results": results, "log": [list(map(str, e)) for e in m.log]}
     json.dump(verdict, open(f"{OUT}/verdict.json", "w"), indent=1)
     print(f"\n  impostor rejected   : {verdict['impostor_rejected']}")
