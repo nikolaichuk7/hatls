@@ -44,11 +44,13 @@ HATLS narrows the attacker, layer by measured layer:
 | Open an independent session to another party | shared mandate keyed by identity, not connection | prevent |
 | Replay or reorder within a session | continuity chain + counter | detect, same message |
 | Relay a genuine session | exporter binding | detect |
-| Be a **physical insider on the exact chip** | liveness beacons: the chip can emit one every **7.96 ms**, so that is how finely an interruption can be seen | narrowed, not closed |
+| Be a **physical insider on the exact chip** | liveness beacons: the chip answers in **7.96 ms**, but the host lets a guest have only ~10 reports per 10 s, so an interruption is seen at about one-second resolution on GCP (`docs/RUNTIME-COST.md`) | narrowed, not closed |
 
 The only survivor is an insider physically at the enrolled chip. We do not claim to eliminate it,
 and we are careful about what the 7.96 ms means: it is how fast the chip can produce a fresh
-liveness beacon, which bounds the **resolution of detection**, not the attacker's window. While the
+liveness beacon, which bounds the **resolution of detection**, not the attacker's window. And on GCP
+the host caps a guest at about ten reports per ten seconds, so the resolution actually available
+is about a second, not eight milliseconds (`docs/RUNTIME-COST.md`). While the
 key is in cleartext in guest memory to sign at all, that window is the life of the process.
 
 There is also a platform where the central guarantee does not hold at all, and it is named up
@@ -153,7 +155,7 @@ stopped**, a real TLS relay on localhost, and a benchmark that reproduces every 
 |---|---|
 | Does it slow the connection? | one attestation report at setup (~8 ms, once); after that the per-step link is **2.5 microseconds** (~400k/sec) |
 | How fast can the mandate verify? | **~1 ms per check incl. ECDSA verify, ~920 checks/sec per core**, scales with cores |
-| Liveness beacon cost on real silicon | **7.96 ms median**, up to ~125/sec; you emit one per policy interval (e.g. once a second), not per packet |
+| Liveness beacon cost on real silicon | **7.96 ms median** per report, but **throttled by the host to ~10 per 10 s** on GCP (every 10th waits ~10 s; `docs/RUNTIME-COST.md`); you emit one per policy interval (e.g. once a second), not per packet |
 | Will it reject legitimate users? | legitimate reconnects from the enrolled instance: **0 false rejects / 500** (no migration in those 500; a migration to other silicon is the separate false-positive risk below) |
 | Will an impersonation slip through? | stolen key on a different instance: **0 missed / 500** |
 | Does normal in-session traffic break the chain? | **0 false breaks / 500** |

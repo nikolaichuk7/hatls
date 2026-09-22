@@ -215,9 +215,10 @@ def main():
             chain=[]; prev=intra_link(sc,tik_pub)
             for counter in range(steps):
                 pl=post_link(exp,prev if counter else intra_link(sc,tik_pub),counter)
-                rep=snp_report(report_data_for(pl,head))
+                t_gen=time.perf_counter(); rep=snp_report(report_data_for(pl,head)); gen_ms=(time.perf_counter()-t_gen)*1000
                 open(f"conn{n:02d}-c{counter}-report.bin","wb").write(rep)
-                chain.append({"counter":counter,"post_link":pl.hex(),"report":base64.b64encode(rep).decode()})
+                chain.append({"counter":counter,"post_link":pl.hex(),"report":base64.b64encode(rep).decode(),
+                              "gen_ms":round(gen_ms,3)})      # how long the chip took; ignored by the mandate
                 prev=pl
             # NOTE: the exporter and the identity key are deliberately NOT sent. The verifier
             # derives the first from its own session and reads the second from the certificate.

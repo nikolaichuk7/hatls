@@ -9,6 +9,27 @@
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
 
+# Runs of 22 September 2026, 15:26–15:33 UTC — what a report costs, and how many you may have
+
+`examples/e2e_timing_hw.py` against a GCP SEV-SNP guest (`hatls-e2e`, us-central1-c, chip
+`75bbd2bb8dfeeb00`), and two in-guest bursts, one on that guest and one on a GCP TDX guest
+(`tdx-lat`, c3-standard-4, us-central1-a). Both deleted after. Evidence:
+`evidence/runtime-cost-20260922T153300Z/`. Full write-up: `docs/RUNTIME-COST.md`.
+
+```
+SEV-SNP report, in guest        7.7 ms median (n=45)   every 10th: 10.23-10.26 s  (host throttle,
+                                                        ~10 per 10 s; the driver retries every 2 s)
+TDX TDREPORT, in guest          6 us median (n=200)     local, MAC-bound, not remotely verifiable
+TDX quote via host QGS          38.9 ms median (n=100)  no throttle in 100; 8000 B each
+
+end to end, Austin -> us-central1, 20 connections x 3 links, medians of 2..20:
+  TCP connect 40.9 ms | TCP+TLS 1.3 89.1 ms | request -> 3 links 109.1 ms | appraise (warm) 5.5 ms
+  FIRST ACCEPTED LINK from SYN: 318 ms   (5 of 20 connections hit the throttle: 10.4-10.5 s)
+```
+
+This run also corrected a claim of ours: the 21 September liveness file already recorded a
+10 237 ms maximum next to its 7.96 ms median, and the median had been presented as a rate.
+
 # Run of 22 September 2026, 14:07 UTC — reattestation freshness, with the draft's own binder
 
 `examples/reattest_freshness_hw.py`, one GCP `n2d-standard-2` SEV-SNP guest (`hatls-84b`,

@@ -147,8 +147,9 @@ not checked), so Option 1 has no running code to measure against.
 
 *Not done.* No clock. The chain proves order and non-replay, not that a link was produced within
 the last *T* seconds; a slow attester is indistinguishable from a prompt one. The resolution at
-which a stalled chain is noticed is bounded by how fast the chip can emit a fresh beacon, 7.96 ms
-(`tools/liveness_probe.py`), and a deployment sets the cadence it wants.
+which a stalled chain is noticed is bounded not by the chip's 7.96 ms per report but by the host's
+throttle on guest requests — about 10 reports per 10 s on GCP, so ~1 s (`docs/RUNTIME-COST.md`) —
+and a deployment sets its cadence within that.
 
 ## 4.5 Negotiation and Capability Discovery — not addressed
 
