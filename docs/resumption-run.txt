@@ -3,12 +3,10 @@ openssl: OpenSSL 3.6.4 25 Aug 2026 (Library: OpenSSL 3.6.4 25 Aug 2026)
 --- connection 1: full handshake, obtain a session ticket ---
 New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
 Early data was not sent
-New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
 
 --- connection 2: resume, and send 0-RTT early data ---
 Reused, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
 Early data was accepted
-Reused, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
 
 --- handshake messages, connection 1 (full) ---
   server gets    ClientHello
