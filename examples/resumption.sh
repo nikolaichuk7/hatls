@@ -15,7 +15,8 @@ printf 'GET /secret HTTP/1.1\r\nHost: x\r\n\r\n' > early.txt
 # -www the server reads its stdin; in the background that is EOF, and in TLS 1.3 SSL_accept()
 # returns before the client's Finished arrives, so the server would shut the connection down
 # right after its own Finished. A stdin that stays open for the run keeps it serving.
-sleep 30 | openssl s_server -cert srv.crt -key srv.key -tls1_3 -accept "$PORT" -early_data -naccept 2 -msg > srv.log 2>&1 &
+sleep 30 2>/dev/null | openssl s_server -cert srv.crt -key srv.key -tls1_3 -accept "$PORT" -early_data -naccept 2 -msg > srv.log 2>&1 &
+SLEEPPID=$(jobs -p | head -1)
 SRVPID=$!
 for i in $(seq 1 30); do
   if grep -q "^ACCEPT" srv.log 2>/dev/null; then break; fi
@@ -30,7 +31,7 @@ echo "--- connection 1: full handshake, obtain a session ticket ---"
 echo
 echo "--- connection 2: resume, and send 0-RTT early data ---"
 (sleep 1.5) | openssl s_client -connect 127.0.0.1:"$PORT" -tls1_3 -sess_in sess.pem -early_data early.txt 2>&1 | grep -E "^(New|Reused), |Early data"
-sleep 1; pkill -P "$SRVPID" 2>/dev/null; kill "$SRVPID" 2>/dev/null; wait "$SRVPID" 2>/dev/null
+sleep 1; kill "$SRVPID" "$SLEEPPID" 2>/dev/null; wait 2>/dev/null
 grep -q "ClientHello" srv.log || { echo "the server saw no handshake at all; its log:"; cat srv.log; exit 1; }
 msgs() { awk -v want="$1" '/ClientHello/{n++} n==want' srv.log | grep -oE "(>>>|<<<) TLS 1.3, Handshake \[length [0-9a-f]+\], [A-Za-z]+" | sed -E 's/\[length [0-9a-f]+\], //; s/>>> TLS 1.3, Handshake/  server sends  /; s/<<< TLS 1.3, Handshake/  server gets   /'; }
 echo
