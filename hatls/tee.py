@@ -184,7 +184,8 @@ def sevsnp_verifier(require_chain=True, allow_debug=False, measurement=None, ark
 
         Done through OpenSSL on purpose. AMD signs ASK and ARK with RSASSA-PSS and encodes
         trailerField=1 explicitly, which is the DEFAULT -- X.690 11.5 forbids that in DER, so
-        strict parsers (python-cryptography's Rust ASN.1) refuse to load the chain at all. A
+        strict parsers refuse to load the chain at all (python-cryptography did so through 42.x;
+        43.0 and later tolerate it -- see docs/AMD-CERT-DER.md). A
         verifier that treats "cannot parse the root" as "skip the root" silently drops back to
         trusting whatever key signed the report. Measured 21 Sep 2026 on the live KDS endpoint.
         """
