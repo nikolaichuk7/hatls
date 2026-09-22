@@ -30,7 +30,8 @@ EXPORTER_LABEL = b"EXPERIMENTAL-hatls-continuity-exporter"    # ours, not RFC 92
 CONTEXT_LABEL  = b"EXPERIMENTAL-hatls-session-context"
 
 def hkdf_expand_label(secret, label, ctx, n=32):
-    full=b"EXPERIMENTAL-hatls "+label       # not the TLS 1.3 label space; see hatls/protocol.py; info=n.to_bytes(2,"big")+bytes([len(full)])+full+bytes([len(ctx)])+ctx
+    full=b"EXPERIMENTAL-hatls "+label       # not the TLS 1.3 label space; see hatls/protocol.py
+    info=n.to_bytes(2,"big")+bytes([len(full)])+full+bytes([len(ctx)])+ctx
     out=t=b""; i=1
     while len(out)<n: t=hmac.new(secret,t+info+bytes([i]),hashlib.sha384).digest(); out+=t; i+=1
     return out[:n]
