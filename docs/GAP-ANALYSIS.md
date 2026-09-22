@@ -56,9 +56,11 @@ open problem.
 
 ## What we can put on the table that the camps cannot
 
-- **Measured re-hosting detection.** Our failover-negatives drill already showed the 3.8.1 attack
-  caught: two endpoints presenting one sealed identity -> the second declined. That is the
-  mitigation 3.8.1 asks for, demonstrated on hardware, which no SEAT document has.
+- **Measured re-hosting detection.** The 3.8.1 attack is caught on hardware in this repository:
+  the same identity key presented from a second genuine SEV-SNP instance is declined on its first
+  message (`evidence/relay-hw-*`, `evidence/enroll-*`, and on AWS shared tenancy where the silicon
+  identifier is masked, `evidence/aws-anchor-*`). That is the mitigation 3.8.1 asks for,
+  demonstrated on hardware, which no SEAT document has.
 - **Measured cost.** The continuity link is HKDF over ~80 bytes: 2.5 µs (`examples/cost.py`). What
   costs is appraising the chip's report, 1.6 ms warm, and cold whatever AMD's KDS takes that day (0.5 s
   and 7.4 s in two consecutive measurements) — a cost every SEV-SNP design pays and the chain does

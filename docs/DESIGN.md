@@ -72,8 +72,9 @@ view is fooled. Two things, and only two, address the key itself:
 2. The mandate -- and this is the part that is ours to contribute. A stolen key used in a second
    TEE produces a SECOND continuity stream under the same identity. A mandate that releases/keeps
    a key alive only while ONE continuous, ordered, fresh chain exists for that identity detects the
-   fork and revokes. We measured exactly this shape in the product's failover-negatives drill: two
-   endpoints presenting one sealed identity -> the second is declined.
+   fork and revokes. This shape is measured in this repository on live SEV-SNP: two instances
+   presenting one identity key -> the second is declined on its first message
+   (`docs/HARDWARE-RESULTS.md`, runs of 21 and 22 September 2026).
 
 So the honest guarantee of "binder + chain + mandate" is not "no substitution". It is
 **"no substitution without detection, and no silent success"**: the cryptography stops relay and
