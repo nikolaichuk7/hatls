@@ -137,6 +137,14 @@ computed from the real transcript, two genuine reports in one connection carry b
 `REPORT_DATA` and the stale one is accepted at reattestation; with the chain the same resend is
 refused ("counter did not advance by one").
 
+*A note on the transport's own options.* Of the reattestation mechanisms early-attestation §5.4
+lists, Extended Key Update (Option 1) would give order without any chain, because each generation's
+secrets derive from the previous one's; post-handshake authentication and CertificateUpdate would
+not, because each exchange restarts from the handshake context (RFC 8446 §4.4). As of 22 September
+2026 no implementation of draft-ietf-tls-extended-key-update is found in OpenSSL 3.6.4 (headers or
+libssl) or in the sources of BoringSSL, wolfSSL, rustls or Go's crypto/tls (s2n, Mbed TLS and GnuTLS
+not checked), so Option 1 has no running code to measure against.
+
 *Not done.* No clock. The chain proves order and non-replay, not that a link was produced within
 the last *T* seconds; a slow attester is indistinguishable from a prompt one. The resolution at
 which a stalled chain is noticed is bounded by how fast the chip can emit a fresh beacon, 7.96 ms
