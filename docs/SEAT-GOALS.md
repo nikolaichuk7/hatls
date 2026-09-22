@@ -239,7 +239,7 @@ the mandate as it would treat a Verifier holding a complete history of every att
 
 Nothing is added to the handshake: HATLS starts after it. Per link, measured here on the real
 reports the repository ships (`examples/cost.py`): deriving a link is 2.5 µs; a full mandate step
-on a mock chip is 1.2 ms, mostly the mock's ECDSA; appraising a genuine SEV-SNP report is 1.6 ms
+on a mock chip is 1–2.5 ms depending on the OpenSSL build, mostly the mock's ECDSA; appraising a genuine SEV-SNP report is 1.6 ms
 warm, and cold it costs whatever AMD's KDS takes to serve the VCEK and chain that day (0.5 s and
 7.4 s in two consecutive measurements), once per chip and TCB — the one cost every SEV-SNP design
 pays and the chain does not add to. State at the Relying Party is the last link and a counter per
