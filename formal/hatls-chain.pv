@@ -1,0 +1,143 @@
+(*
+  HATLS continuity CHAIN + stateful mandate, in the applied pi calculus.
+
+  hatls.pv models ONE link per session and proves relay, re-hosting and session separation.
+  It says nothing about ORDER, because it has no counter. This model adds the chain as the
+  code actually walks it (tools/guest_probe.py, Mandate._appraise step 3-4):
+
+      p0 = link(exporter, intra_link,  c0)         position 0 chains from the first link
+      p1 = link(exporter, p0,          c1)         position n+1 chains from position n
+      p2 = link(exporter, p1,          c2)
+
+  and a mandate that keeps per-session state: it accepts position 0 only at counter 0 and
+  only chained from intra_link; position n+1 only at counter n+1 and only chained from the
+  link IT ACCEPTED at n. State is expressed by sequential composition: the mandate process
+  reads position 0, then 1, then 2, and each check refers to what it accepted before.
+
+  THE PROPERTY (draft-fossati-seat-early-attestation-07 Section 8.4, the one measured on
+  hardware in evidence/reattest-20260922T133416Z): a link accepted at position n was
+  produced by the enrolled instance, in this session, AT position n. In particular the link
+  from position 0 cannot be accepted at position 1, and a link cannot be skipped or reordered.
+  In ProVerif, `event(A) ==> event(B)` means every A is preceded by a B, so this is a
+  statement about order in the trace, not merely about values.
+
+  ATTACKER, stronger than in hatls.pv on purpose:
+    * Dolev-Yao on the network.
+    * TIK is public: the identity key is stolen, by assumption.
+    * The thief's own TEE signs ANYTHING the thief asks (an oracle), because a thief controls
+      the software inside its own guest. hatls.pv only let it run the honest code.
+    * The thief is the TLS peer in some sessions with the honest guest and in some sessions
+      with the mandate, and so knows the exporter and session context of those sessions.
+      This is what a relay actually is: two TLS connections, one attacker in the middle.
+  What we still assume: only the enrolled instance can produce evidence that verifies under
+  its key (that is the hardware), and two TLS connections never share an exporter (RFC 8446).
+
+  NOT MODELLED, as in hatls.pv: transfer grants, revocation, the ledger, the witnessed head.
+*)
+
+free net: channel.
+
+type tee_key.
+type sess.
+
+(* ---- primitives ---- *)
+fun tee_pk(tee_key): bitstring.
+fun report(bitstring, tee_key): bitstring.
+reduc forall d: bitstring, k: tee_key;
+      open_report(report(d, k), tee_pk(k)) = d.
+
+fun h1(bitstring): bitstring.                          (* SHA-512 over the binder label *)
+fun kdf(bitstring, bitstring, bitstring): bitstring.   (* HKDF-Expand-Label, "attestation" *)
+fun link(bitstring, bitstring, bitstring): bitstring.  (* HKDF-Expand-Label, "continuity":
+                                                          link(exporter, prev, counter) *)
+
+(* counter values: public constants, as the wire format makes them *)
+const c0, c1, c2: bitstring.
+
+fun exporter(sess): bitstring [private].
+fun sctx(sess): bitstring [private].
+
+(* ---- events ----
+   AttestedAt(tik, instance, exporter, session context, position, link)
+   AcceptedAt(tik, instance, exporter, session context, position, link)                   *)
+event Enrolled(bitstring, bitstring).
+event AttestedAt(bitstring, bitstring, bitstring, bitstring, bitstring, bitstring).
+event AcceptedAt(bitstring, bitstring, bitstring, bitstring, bitstring, bitstring).
+event Reachable().
+
+(* ---- the attester: the guest probe, three links in one session ---- *)
+let Attester(tik: bitstring, ik: tee_key, s: sess) =
+    let e  = exporter(s) in
+    let sc = sctx(s) in
+    let il = kdf(sc, tik, tik) in
+    let p0 = link(e, il, c0) in
+    event AttestedAt(tik, tee_pk(ik), e, sc, c0, p0);
+    out(net, (c0, p0, report(h1(p0), ik)));
+    let p1 = link(e, p0, c1) in
+    event AttestedAt(tik, tee_pk(ik), e, sc, c1, p1);
+    out(net, (c1, p1, report(h1(p1), ik)));
+    let p2 = link(e, p1, c2) in
+    event AttestedAt(tik, tee_pk(ik), e, sc, c2, p2);
+    out(net, (c2, p2, report(h1(p2), ik))).
+
+(* ---- the mandate: Mandate._appraise, steps 1, 3 and 4, with its per-session state ---- *)
+let Mandate(tik: bitstring, enrolled_ipk: bitstring, s: sess) =
+    let e  = exporter(s) in                                  (* derived, never taken off the wire *)
+    let sc = sctx(s) in
+    let il = kdf(sc, tik, tik) in
+    (* position 0: "a session's first link must be counter 0", chained from intra_link *)
+    in(net, (n0: bitstring, q0: bitstring, ev0: bitstring));
+    if n0 = c0 then
+    if q0 = link(e, il, c0) then
+    if open_report(ev0, enrolled_ipk) = h1(q0) then
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c0, q0);
+    (* position 1: "counter must advance by one", chained from WHAT WAS ACCEPTED at 0 *)
+    in(net, (n1: bitstring, q1: bitstring, ev1: bitstring));
+    if n1 = c1 then
+    if q1 = link(e, q0, c1) then
+    if open_report(ev1, enrolled_ipk) = h1(q1) then
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c1, q1);
+    (* position 2 *)
+    in(net, (n2: bitstring, q2: bitstring, ev2: bitstring));
+    if n2 = c2 then
+    if q2 = link(e, q1, c2) then
+    if open_report(ev2, enrolled_ipk) = h1(q2) then
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c2, q2);
+    event Reachable().
+
+(* ---- queries ----
+   1. ORDER (Section 8.4): whatever is accepted at position n was attested, by the enrolled
+      instance, for this exporter, in this session, AT position n -- and before acceptance.
+   2. The same, injectively: no accepted link is backed by an attestation already used.
+   3. Re-hosting: the accepting instance is the enrolled one.
+   4. Reachability: the honest three-link run completes, so 1-3 are not vacuous.            *)
+query t, i, e, sc, n, p: bitstring;
+      event(AcceptedAt(t, i, e, sc, n, p)) ==> event(AttestedAt(t, i, e, sc, n, p)).
+
+query t, i, e, sc, n, p: bitstring;
+      inj-event(AcceptedAt(t, i, e, sc, n, p)) ==> inj-event(AttestedAt(t, i, e, sc, n, p)).
+
+query t, i, e, sc, n, p: bitstring;
+      event(AcceptedAt(t, i, e, sc, n, p)) ==> event(Enrolled(t, i)).
+
+query event(Reachable()).
+
+(* ---- the world ---- *)
+process
+    new tik_seed: bitstring;
+    let tik = h1(tik_seed) in
+    out(net, tik);                                           (* THE IDENTITY KEY IS STOLEN *)
+    new ik_good: tee_key;                                    (* the enrolled instance *)
+    new ik_evil: tee_key;                                    (* the thief's own, genuine, instance *)
+    out(net, tee_pk(ik_good)); out(net, tee_pk(ik_evil));
+    event Enrolled(tik, tee_pk(ik_good));
+    (* guest and mandate, directly connected *)
+    ( ! new s: sess; ( Attester(tik, ik_good, s) | Mandate(tik, tee_pk(ik_good), s) ) )
+    (* the honest guest, with the THIEF as its TLS peer: the thief learns that session's values *)
+  | ( ! new s: sess; ( Attester(tik, ik_good, s) | out(net, (exporter(s), sctx(s))) ) )
+    (* the mandate, with the THIEF as its TLS peer: likewise *)
+  | ( ! new s: sess; ( Mandate(tik, tee_pk(ik_good), s) | out(net, (exporter(s), sctx(s))) ) )
+    (* the thief's instance running the honest code, and *)
+  | ( ! new s: sess; Attester(tik, ik_evil, s) )
+    (* the thief's instance signing whatever the thief asks *)
+  | ( ! in(net, d: bitstring); out(net, report(d, ik_evil)) )

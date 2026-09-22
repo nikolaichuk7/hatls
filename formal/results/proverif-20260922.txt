@@ -1,0 +1,93 @@
+### proverif version
+Proverif 2.05. Cryptographic protocol verifier, by Bruno Blanchet, Vincent Cheval, and Marc Sylvestre
+
+### hatls.pv
+Verification summary:
+
+Query event(Accepted(t,i,e_3)) ==> event(Attested(t,i,e_3)) is true.
+
+Query event(Accepted(t,i,e_3)) ==> event(Enrolled(t,i)) is true.
+
+Query event(AcceptedInSession(t,sc_3)) ==> event(AttestedInSession(t,sc_3)) is true.
+
+Query not event(Reachable) is false.
+
+exit=0
+
+### hatls-relay-defect.pv
+Verification summary:
+
+Query event(Accepted(t,i,e_3)) ==> event(Attested(t,i,e_3)) is true.
+
+Query event(Accepted(t,i,e_3)) ==> event(Enrolled(t,i)) is true.
+
+Query event(AcceptedInSession(t,sc_3)) ==> event(AttestedInSession(t,sc_3)) is false.
+
+Query not event(Reachable) is false.
+
+exit=0
+
+### hatls-chain.pv
+Verification summary:
+
+Query event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> event(AttestedAt(t,i,e_5,sc_5,n,p)) is true.
+
+Query inj-event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> inj-event(AttestedAt(t,i,e_5,sc_5,n,p)) is true.
+
+Query event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> event(Enrolled(t,i)) is true.
+
+Query not event(Reachable) is false.
+
+exit=0
+
+### hatls-constant-binder.pv
+Verification summary:
+
+Query event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> event(AttestedAt(t,i,e_5,sc_5,n,p)) is false.
+
+Query inj-event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> inj-event(AttestedAt(t,i,e_5,sc_5,n,p)) is false.
+
+Query event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> event(Enrolled(t,i)) is true.
+
+Query not event(Reachable) is false.
+
+exit=0
+
+### hatls-constant-binder.pv — the trace ProVerif reconstructed for the ORDER query
+### (the Evidence emitted at position 0, {17}, is accepted at position 1, {32}->{36}, in the SAME
+###  session s_10: draft-fossati-seat-early-attestation-07 Section 8.4, found by the prover)
+
+A more detailed output of the traces is available with
+  set traceDisplay = long.
+
+new tik_seed: bitstring creating tik_seed_1 at {1}
+
+out(net, ~M) with ~M = h1(tik_seed_1) at {3}
+
+new ik_good: tee_key creating ik_good_1 at {4}
+
+new ik_evil: tee_key creating ik_evil_1 at {5}
+
+out(net, ~M_1) with ~M_1 = tee_pk(ik_good_1) at {6}
+
+out(net, ~M_2) with ~M_2 = tee_pk(ik_evil_1) at {7}
+
+event Enrolled(h1(tik_seed_1),tee_pk(ik_good_1)) at {8}
+
+new s: sess creating s_10 at {10} in copy a
+
+event AttestedAt(h1(tik_seed_1),tee_pk(ik_good_1),exporter(s_10),sctx(s_10),c0,kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))) at {16} in copy a
+
+out(net, (~M_3,~M_4,~M_5)) with ~M_3 = c0, ~M_4 = kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1)), ~M_5 = report(h1(kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))),ik_good_1) at {17} in copy a
+
+in(net, (c0,~M_4,~M_5)) with ~M_4 = kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1)), ~M_5 = report(h1(kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))),ik_good_1) at {27} in copy a
+
+event AcceptedAt(h1(tik_seed_1),tee_pk(ik_good_1),exporter(s_10),sctx(s_10),c0,kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))) at {31} in copy a
+
+in(net, (c1,~M_4,~M_5)) with ~M_4 = kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1)), ~M_5 = report(h1(kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))),ik_good_1) at {32} in copy a
+
+event AcceptedAt(h1(tik_seed_1),tee_pk(ik_good_1),exporter(s_10),sctx(s_10),c1,kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))) at {36} in copy a (goal)
+
+The event AcceptedAt(h1(tik_seed_1),tee_pk(ik_good_1),exporter(s_10),sctx(s_10),c1,kdf(sctx(s_10),h1(tik_seed_1),h1(tik_seed_1))) is executed at {36} in copy a.
+A trace has been found.
+RESULT event(AcceptedAt(t,i,e_5,sc_5,n,p)) ==> event(AttestedAt(t,i,e_5,sc_5,n,p)) is false.

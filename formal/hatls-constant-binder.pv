@@ -1,0 +1,104 @@
+(*
+  NEGATIVE CONTROL for hatls-chain.pv: the same world, the same attacker, the same queries,
+  with the binder CONSTANT for the connection's lifetime.
+
+  This is the shape of draft-fossati-seat-early-attestation-07 Section 5.1 -- the binder is
+  derived once per connection and never changes -- and Section 8.4 states what follows:
+
+      "an attester ... could resend Evidence generated earlier in the connection in
+       response to a later reattestation request, since the binder still matches and the
+       Relying Party has no way to distinguish it from fresh Evidence."
+
+  A proof that the chained model has the property is only worth something next to a
+  demonstration that the prover would have caught its absence. Here the ORDER query must
+  come back FALSE, with a trace in which the Evidence from position 0 is accepted at
+  position 1. That is the attack measured on real silicon in evidence/reattest-20260922T133416Z
+  ("REPORT_DATA identical: True ... binder-only appraisal: ACCEPTED"), found by the prover.
+
+  HONEST SCOPE, same as the hardware run: this binder is derived from the session context, not
+  from the ClientHello..ServerHello transcript the draft specifies. The property under test is
+  constancy, which both share; the 8.4 defect follows from constancy alone.
+*)
+
+free net: channel.
+
+type tee_key.
+type sess.
+
+fun tee_pk(tee_key): bitstring.
+fun report(bitstring, tee_key): bitstring.
+reduc forall d: bitstring, k: tee_key;
+      open_report(report(d, k), tee_pk(k)) = d.
+
+fun h1(bitstring): bitstring.
+fun kdf(bitstring, bitstring, bitstring): bitstring.
+
+const c0, c1, c2: bitstring.
+
+fun exporter(sess): bitstring [private].
+fun sctx(sess): bitstring [private].
+
+event Enrolled(bitstring, bitstring).
+event AttestedAt(bitstring, bitstring, bitstring, bitstring, bitstring, bitstring).
+event AcceptedAt(bitstring, bitstring, bitstring, bitstring, bitstring, bitstring).
+event Reachable().
+
+(* ---- the attester: three reports, ONE binder ---- *)
+let Attester(tik: bitstring, ik: tee_key, s: sess) =
+    let e  = exporter(s) in
+    let sc = sctx(s) in
+    let b  = kdf(sc, tik, tik) in                        (* derived once; never changes *)
+    event AttestedAt(tik, tee_pk(ik), e, sc, c0, b);
+    out(net, (c0, b, report(h1(b), ik)));
+    event AttestedAt(tik, tee_pk(ik), e, sc, c1, b);     (* "reattestation": same binder *)
+    out(net, (c1, b, report(h1(b), ik)));
+    event AttestedAt(tik, tee_pk(ik), e, sc, c2, b);
+    out(net, (c2, b, report(h1(b), ik))).
+
+(* ---- the relying party: appraises the binder, as Section 5.1.2 does ---- *)
+let Mandate(tik: bitstring, enrolled_ipk: bitstring, s: sess) =
+    let e  = exporter(s) in
+    let sc = sctx(s) in
+    let b  = kdf(sc, tik, tik) in
+    in(net, (n0: bitstring, q0: bitstring, ev0: bitstring));
+    if n0 = c0 then
+    if q0 = b then
+    if open_report(ev0, enrolled_ipk) = h1(b) then
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c0, q0);
+    in(net, (n1: bitstring, q1: bitstring, ev1: bitstring));
+    if n1 = c1 then
+    if q1 = b then                                        (* the binder still matches ... *)
+    if open_report(ev1, enrolled_ipk) = h1(b) then        (* ... and so does the old report *)
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c1, q1);
+    in(net, (n2: bitstring, q2: bitstring, ev2: bitstring));
+    if n2 = c2 then
+    if q2 = b then
+    if open_report(ev2, enrolled_ipk) = h1(b) then
+    event AcceptedAt(tik, enrolled_ipk, e, sc, c2, q2);
+    event Reachable().
+
+(* identical queries to hatls-chain.pv; the first two are expected to FAIL here *)
+query t, i, e, sc, n, p: bitstring;
+      event(AcceptedAt(t, i, e, sc, n, p)) ==> event(AttestedAt(t, i, e, sc, n, p)).
+
+query t, i, e, sc, n, p: bitstring;
+      inj-event(AcceptedAt(t, i, e, sc, n, p)) ==> inj-event(AttestedAt(t, i, e, sc, n, p)).
+
+query t, i, e, sc, n, p: bitstring;
+      event(AcceptedAt(t, i, e, sc, n, p)) ==> event(Enrolled(t, i)).
+
+query event(Reachable()).
+
+process
+    new tik_seed: bitstring;
+    let tik = h1(tik_seed) in
+    out(net, tik);
+    new ik_good: tee_key;
+    new ik_evil: tee_key;
+    out(net, tee_pk(ik_good)); out(net, tee_pk(ik_evil));
+    event Enrolled(tik, tee_pk(ik_good));
+    ( ! new s: sess; ( Attester(tik, ik_good, s) | Mandate(tik, tee_pk(ik_good), s) ) )
+  | ( ! new s: sess; ( Attester(tik, ik_good, s) | out(net, (exporter(s), sctx(s))) ) )
+  | ( ! new s: sess; ( Mandate(tik, tee_pk(ik_good), s) | out(net, (exporter(s), sctx(s))) ) )
+  | ( ! new s: sess; Attester(tik, ik_evil, s) )
+  | ( ! in(net, d: bitstring); out(net, report(d, ik_evil)) )
