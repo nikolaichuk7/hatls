@@ -1,0 +1,21 @@
+{
+  "guest": "hatls-84b",
+  "zone": "us-central1-c",
+  "draft_binder": {
+    "suite": "TLS_AES_256_GCM_SHA384",
+    "binder": "37ea07e49dc00ca9b2cff2740a46dbd267f62a20e1088d145eae0e5c2909e8d33a0c40c661638cc2c5447217be7964f5",
+    "guest_binder": "37ea07e49dc00ca9b2cff2740a46dbd267f62a20e1088d145eae0e5c2909e8d33a0c40c661638cc2c5447217be7964f5",
+    "transcript_sha256": "69936ce757fa2a08ae8b78e69231e205c0d2b9ef95e7070515cfa9780e697473",
+    "report_data_round0": "37ea07e49dc00ca9b2cff2740a46dbd267f62a20e1088d145eae0e5c2909e8d33a0c40c661638cc2c5447217be7964f500000000000000000000000000000000",
+    "report_data_round1": "37ea07e49dc00ca9b2cff2740a46dbd267f62a20e1088d145eae0e5c2909e8d33a0c40c661638cc2c5447217be7964f500000000000000000000000000000000",
+    "report_data_identical": true,
+    "reports_byte_identical": false,
+    "stale_evidence_accepted": true
+  },
+  "chained_binder": {
+    "step0": "accepted; continuity intact",
+    "step1": "accepted; continuity intact",
+    "stale_evidence_accepted": false,
+    "reason": "counter did not advance by one (replay or reorder)"
+  }
+}

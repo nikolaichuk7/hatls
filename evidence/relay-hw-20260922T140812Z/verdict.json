@@ -1,0 +1,46 @@
+{
+ "guest": "136.116.53.36",
+ "enrolled": true,
+ "instance": "7d8866f83588f362",
+ "place": "75bbd2bb8dfeeb00",
+ "zone": "us-central1-c",
+ "direct_accepted": true,
+ "relay_accepted": false,
+ "exporters": {
+  "guest_side": "3b4bb5ce45a86ab184600fc68e4e8af0424181c6a0616186f4a6118de3d31d4b",
+  "client_side": "aa532e13eca3b22df593dd4df1d8bfc8a14dfb11542e66502123bccda86c2eec"
+ },
+ "log": [
+  [
+   "mandate-mode",
+   "in-process",
+   "enrolment-optional",
+   "anchor-required"
+  ],
+  [
+   "enrolled",
+   "3059301306072a86",
+   "7d8866f83588",
+   "fixed"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "2170f2a2",
+   "0",
+   "7d8866f83588"
+  ],
+  [
+   "accept",
+   "3059301306072a86",
+   "2170f2a2",
+   "1",
+   "7d8866f83588"
+  ],
+  [
+   "declined-linkmismatch",
+   "3059301306072a86",
+   "0"
+  ]
+ ]
+}

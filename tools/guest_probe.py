@@ -49,6 +49,82 @@ def report_data_for(link, head=None):
 class Req(ctypes.Structure):  _fields_=[("user_data",ctypes.c_ubyte*64),("vmpl",ctypes.c_uint32),("flags",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24)]
 class Resp(ctypes.Structure): _fields_=[("status",ctypes.c_uint32),("report_size",ctypes.c_uint32),("rsvd",ctypes.c_ubyte*24),("report",ctypes.c_ubyte*4000)]
 class Io(ctypes.Structure):   _fields_=[("msg_version",ctypes.c_ubyte),("req_data",ctypes.c_uint64),("resp_data",ctypes.c_uint64),("exitinfo2",ctypes.c_uint64)]
+# ---- draft-fossati-seat-early-attestation-07 Section 5.1.1, standalone copy of hatls/transcript.py ----
+# (this file runs inside the guest with no access to hatls/; tests/test_guest_probe_agrees.py keeps
+#  these in step with the library, byte for byte)
+HRR_RANDOM = bytes.fromhex("cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c")
+
+def tls13_hkdf_expand_label(secret, label, context, length, H):
+    full=b"tls13 "+label
+    info=length.to_bytes(2,"big")+bytes([len(full)])+full+bytes([len(context)])+context
+    out=t=b""; i=1
+    while len(out)<length: t=hmac.new(secret,t+info+bytes([i]),H).digest(); out+=t; i+=1
+    return out[:length]
+
+def suite_hash(cipher_name):
+    if cipher_name.endswith("_SHA384"): return hashlib.sha384
+    if cipher_name.endswith("_SHA256"): return hashlib.sha256
+    raise ValueError(cipher_name)
+
+def first_handshake_message(stream, msg_type):
+    i=0; hs=b""
+    while i+5<=len(stream):
+        ctype=stream[i]; rlen=int.from_bytes(stream[i+3:i+5],"big"); body=stream[i+5:i+5+rlen]; i+=5+rlen
+        if ctype!=0x16:
+            if hs: break
+            continue
+        hs+=body
+        if len(hs)>=4:
+            t=hs[0]; L=int.from_bytes(hs[1:4],"big")
+            if len(hs)>=4+L: return hs[:4+L] if t==msg_type else None
+    return None
+
+def transcript_ch_sh(client_to_server, server_to_client):
+    ch=first_handshake_message(client_to_server,0x01); sh=first_handshake_message(server_to_client,0x02)
+    if ch is None or sh is None: raise ValueError("no ClientHello/ServerHello at the start of the streams")
+    if sh[6:38]==HRR_RANDOM: raise ValueError("HelloRetryRequest handshake not modelled")
+    return ch, sh
+
+def draft_binder(ch, sh, server_spki_der, H):
+    L=H().digest_size
+    base=tls13_hkdf_expand_label(bytes(L),b"attestation base",H(ch+sh).digest(),L,H)
+    return tls13_hkdf_expand_label(base,b"attestation",H(server_spki_der).digest(),L,H)
+
+def binder_report_data(binder): return binder+bytes(64-len(binder))
+
+class BioConnection:
+    """TLS over memory BIOs, so the handshake bytes pass through us and can be recorded."""
+    def __init__(self, context, sock, server):
+        from OpenSSL import SSL
+        self.SSL=SSL; self.conn=SSL.Connection(context,None); self.sock=sock
+        (self.conn.set_accept_state if server else self.conn.set_connect_state)()
+        self.sent=b""; self.received=b""; self._recording=True
+    def _flush(self):
+        while True:
+            try: data=self.conn.bio_read(65536)
+            except self.SSL.WantReadError: return
+            self.sock.sendall(data)
+            if self._recording: self.sent+=data
+    def _feed(self):
+        data=self.sock.recv(65536)
+        if not data: raise ConnectionError("peer closed")
+        if self._recording: self.received+=data
+        self.conn.bio_write(data)
+    def handshake(self):
+        while True:
+            try: self.conn.do_handshake(); self._flush(); break
+            except self.SSL.WantReadError: self._flush(); self._feed()
+        self._recording=False
+    def recv(self, n):
+        while True:
+            try: data=self.conn.recv(n); self._flush(); return data
+            except self.SSL.WantReadError: self._flush(); self._feed()
+    def sendall(self, data): self.conn.sendall(data); self._flush()
+    def shutdown(self):
+        try: self.conn.shutdown(); self._flush()
+        except Exception: pass
+    def __getattr__(self, name): return getattr(self.conn, name)
+
 def snp_report(user_data):
     req=Req(); ctypes.memmove(req.user_data,user_data,64); req.vmpl=0; req.flags=0; resp=Resp()
     io=Io(1,ctypes.addressof(req),ctypes.addressof(resp),0)
@@ -80,9 +156,9 @@ def main():
     while time.time()<deadline:
         try: s,addr=srv.accept()
         except socket.timeout: continue
-        n+=1; s.setblocking(True); conn=SSL.Connection(ctx,s); conn.set_accept_state()
+        n+=1; s.setblocking(True); conn=BioConnection(ctx,s,server=True)
         try:
-            conn.do_handshake()
+            conn.handshake()
             line=b""
             while not line.endswith(b"\n") and len(line)<300: line+=conn.recv(1)
             req=json.loads(line.strip())
@@ -110,13 +186,26 @@ def main():
                 # reports that all bind that one constant value, so a Relying Party appraising
                 # only the binder has nothing to tell a fresh report from an earlier one.
                 # This is the setting of that draft's Section 8.4, on real silicon.
-                binder=intra_link(sc,tik_pub); rounds=[]
+                if req.get("binder")=="draft-transcript":
+                    # THE DRAFT'S OWN BINDER, Section 5.1.1: from this connection's real
+                    # ClientHello..ServerHello transcript, this guest's SPKI, the suite's hash,
+                    # and the "tls13 " label space -- not an analogue. Placed raw in REPORT_DATA.
+                    ch,sh=transcript_ch_sh(conn.received,conn.sent)
+                    H=suite_hash(conn.get_cipher_name())
+                    binder=draft_binder(ch,sh,tik_pub,H); rd=binder_report_data(binder)
+                    extra={"binder_kind":"draft-transcript","suite":conn.get_cipher_name(),
+                           "transcript_sha256":hashlib.sha256(ch+sh).hexdigest(),
+                           "ch_len":len(ch),"sh_len":len(sh)}
+                else:
+                    binder=intra_link(sc,tik_pub); rd=report_data_for(binder,head)
+                    extra={"binder_kind":"session-context"}
+                rounds=[]
                 for counter in range(steps):
-                    rep=snp_report(report_data_for(binder,head))
+                    rep=snp_report(rd)
                     open(f"conn{n:02d}-static{counter}-report.bin","wb").write(rep)
                     rounds.append({"round":counter,"binder":binder.hex(),
                                    "report":base64.b64encode(rep).decode()})
-                blob=json.dumps({"instance":iid,"zone":zone,"static":True,"rounds":rounds}).encode()
+                blob=json.dumps({"instance":iid,"zone":zone,"static":True,"rounds":rounds,**extra}).encode()
                 conn.sendall(struct.pack(">I",len(blob))+blob)
                 json.dump(json.loads(blob),open(f"conn{n:02d}-static.json","w"))
                 print(f"conn {n}: {steps} STATIC-binder reports emitted, binder {binder.hex()[:16]}",flush=True)
