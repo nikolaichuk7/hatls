@@ -76,7 +76,7 @@ on shared tenancy it is not there at all. The gap is not that the profile is wro
 verifier which reuses the attester's identity as the target's does so silently, and on a masked
 platform reports a match between two strings of zeros.
 
-## Intel TDX: no equivalent, and that is the finding
+## Intel TDX: none from the platform — but the guest can make one, and the hardware measures it
 
 Two TDs launched from one image, a TDREPORT from each (`evidence/tdx-claims-20260921T211425Z/`),
 every field of the 1024-byte structure compared at its offset: 16 fields identical — `MRTD`,
@@ -88,8 +88,35 @@ Exactly one field separates two live TDs, and it is the wrong one. `MROWNER` is 
 the TDX module; the host VMM supplies it at TD initialisation (`KVM_TDX_INIT_VM`), and it defaults
 to zero. A cloud writing something per-instance there is a convention that happens to be useful,
 not a guarantee: the party that would re-host a workload is the party that picks the value. A
-continuity design that works on SEV-SNP does not port to TDX by renaming a field; there the
-instance identity has to come from outside the report.
+continuity design that works on SEV-SNP does not port to TDX by renaming a field.
+
+What the platform does give a TD is a register the host cannot write. The four RTMRs are
+extended only from inside the TD (`TDG.MR.RTMR.EXTEND`; Linux exposes them as
+`/sys/class/misc/tdx_guest/measurements/rtmrN:sha384`), start at zero, and are carried in every
+TDREPORT and quote. A normal boot fills RTMR0–2 (firmware, loader, OS) and leaves RTMR3 at zero.
+So a TD can give itself an instance identity: draw 48 random bytes, extend RTMR3 once, discard the
+bytes. Measured on two GCP TDs from one image (`evidence/tdx-rtmr-20260922T160500Z/`):
+
+| | TD a | TD b |
+|---|---|---|
+| `MRTD` | `c1ee9c16…` | `c1ee9c16…` — same image |
+| `RTMR3` before | 0 | 0 |
+| `RTMR3` after one extension | `372d9c85…` | `d3345726…` — distinct |
+| equals `SHA-384(0 ‖ nonce)` | yes | yes — the module folded it in |
+| every other register | unchanged | unchanged |
+
+The value is random, so a second TD cannot reproduce it without the discarded preimage; it is
+measured, so no report can carry a different one; it is the TD's, so the host cannot set it —
+the three properties `REPORT_ID` has on SEV-SNP, obtained here by the guest rather than the
+firmware. It is born at boot, so a restart is a new instance (correct), and TD migration, which
+carries the RTMRs, moves it with the workload, as `REPORT_ID` moves with a migration agent.
+
+The anchor rule is implemented on both report layouts (`hatls/tee.py: parse_tdreport`,
+`parse_tdx_quote`, `tdx_anchor`) and mirrors `snp_anchor`: a TD whose RTMR3 is still zero has no
+instance and the mandate fails closed on it, exactly as it does on an all-zero `CHIP_ID`. The
+three quotes from 11 September, taken before any of this, read as "no instance". Not implemented
+here: verification of a quote's QE signature and PCK chain against Intel's PCS; the rule reads a
+body that a deployment must have verified first, as `sevsnp_verifier` does for SNP.
 
 ## Who writes each field — and why no field can say where a key was born
 
@@ -140,8 +167,8 @@ first instance on record — needs nothing the guest says about its key; it need
 | question | on real silicon |
 |---|---|
 | endorsements-11 §4 — granularity of endorsed keys | per chip (VCEK) or per region (VLEK); **per instance: none** |
-| use-cases 4.3 — a machine identifier | SEV-SNP: `REPORT_ID`, firmware-issued, not a launch input; but the silicon has no identity on AWS. TDX: only the host's `MROWNER` |
-| use-cases 3.8.1 — continuity with an instance | possible on SEV-SNP by anchoring on `REPORT_ID`, which is what this repository does; **not possible from the TDREPORT alone** |
+| use-cases 4.3 — a machine identifier | SEV-SNP: `REPORT_ID`, firmware-issued, not a launch input; but the silicon has no identity on AWS. TDX: from the platform only the host's `MROWNER`; from the guest, a measured RTMR |
+| use-cases 3.8.1 — continuity with an instance | possible on SEV-SNP by anchoring on `REPORT_ID`, which is what this repository does; possible on TDX by anchoring on an RTMR the guest extends once at boot — measured, and the rule is implemented; not possible from the platform's own claims alone |
 
 A note on wording: 4.3 asks for an identifier *"provided by the infrastructure provider"*.
 `REPORT_ID` is provided by the firmware, not the provider, and no provider-supplied identifier

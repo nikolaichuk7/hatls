@@ -14,7 +14,7 @@ what is not done. Three goals are not addressed; those rows say so first.
 |---|---|---|
 | 4.1 | Cryptographic binding to communication channel | **fulfilled** (post-handshake) |
 | 4.2 | Compound authentication | partial |
-| 4.3 | Cryptographic binding to machine identifier | **fulfilled** on SEV-SNP, fails closed elsewhere |
+| 4.3 | Cryptographic binding to machine identifier | **fulfilled** on SEV-SNP; on TDX with a guest-extended RTMR; fails closed otherwise |
 | 4.4 | Attestation credential freshness | **fulfilled** (order and per-connection), no wall clock |
 | 4.5 | Negotiation and capability discovery | **not addressed** |
 | 4.6 | Attestation model flexibility | partial: Background Check only |
@@ -103,8 +103,11 @@ signing key is one per region, so `REPORT_ID` is the only claim that separates t
 (`evidence/aws-anchor-*`, `docs/HARDWARE-RESULTS.md`). On Intel TDX, two TDs launched from one image
 differ in exactly one TDREPORT field, `MROWNER` — which the host VMM supplies at TD
 initialisation, so it is the word of the party that would do the re-hosting
-(`evidence/tdx-claims-20260921T211425Z/verdict.json`). No hardware-issued instance claim exists
-there, the anchor is absent, and the mandate fails closed.
+(`evidence/tdx-claims-20260921T211425Z/verdict.json`). No firmware-issued instance claim exists
+there; what exists is a register only the TD can write: extending RTMR3 once at boot with random
+bytes gives two TDs from one image distinct, hardware-measured identities (measured,
+`evidence/tdx-rtmr-20260922T160500Z/`), and `tdx_anchor` reads it, failing closed while RTMR3 is
+zero. Quote signature verification against Intel's PCS is not implemented here.
 `tests/test_snp_corpus.py` holds the rule: an all-zero `CHIP_ID` is never an identity.
 
 *A note on wording.* The goal asks for an identifier "provided by the infrastructure provider".
@@ -205,7 +208,10 @@ seen at all, which is the limit the draft itself states.
 
 *Measured.* Chains of two and three links per session on live SEV-SNP throughout `evidence/`;
 the ledger head bound into a link by the chip in `evidence/witness-hw-*`. Longer chains have not
-been run on hardware; the mechanism does not change with length.
+been run on hardware; the mechanism does not change with length. What a link costs and how many a
+guest may have: a SEV-SNP report is 7.7 ms but the host throttles a guest to about ten per ten
+seconds on GCP; a TDX quote is 38.9 ms with no throttle seen in 100 (`docs/RUNTIME-COST.md`).
+That is the cadence 4.8.1's "periodic" attestation actually has available.
 
 *Not done.* Session resumption is not handled by HATLS and not tested. By construction a resumed
 TLS session has a fresh exporter, so no chain can be inherited and a new one must start at counter
@@ -239,7 +245,11 @@ warm, and cold it costs whatever AMD's KDS takes to serve the VCEK and chain tha
 pays and the chain does not add to. State at the Relying Party is the last link and a counter per
 live connection, about 40 bytes, plus the per-identity ledger record. No round trip is added to
 the handshake; after it, one request–response carries a batch of steps in the probe protocol, and
-the mandate appraises each step in that batch independently.
+the mandate appraises each step in that batch independently. End to end across the Internet,
+the first accepted link arrives 318 ms after SYN (median; `docs/RUNTIME-COST.md`). For the
+intra-handshake alternative, the bytes are in `docs/EVIDENCE-SIZE.md`: SEV-SNP Evidence never
+pushes a server's first flight past the initial congestion window; a TDX quote does, with a long
+web-PKI chain and a post-quantum key share.
 
 ---
 

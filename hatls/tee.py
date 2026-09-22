@@ -110,6 +110,49 @@ def parse_snp(b):
             "report_data": b[_OFF["report_data"]:_OFF["report_data"]+64],
             "tcb": (tcb & 0xff, (tcb >> 8) & 0xff, (tcb >> 48) & 0xff, (tcb >> 56) & 0xff)}
 
+# ---- Intel TDX: the anchor rule, on the report body ---------------------------------------
+# A TDREPORT (1024 B, what the TD gets locally) and a Quote v4 (what a remote party gets) carry
+# the same measurement registers at different offsets. Nothing in either is an instance identity
+# by construction: two TDs from one image are identical except MROWNER, which the host supplies
+# (docs/INSTANCE-IDENTITY.md). A TD can MAKE one: extend RTMR3 once at boot with 48 random bytes
+# and discard them. The TDX module folds them in (RTMR3' = SHA-384(RTMR3 || data)); the host has
+# no write path to an RTMR; every later report carries the value. Measured on two GCP TDs in
+# evidence/tdx-rtmr-20260922T160500Z. The rule mirrors snp_anchor: a zero RTMR3 -- a TD that never
+# extended -- is no instance at all, and the mandate fails closed on it.
+#
+# NOT implemented here: verification of the quote's QE signature and PCK chain against Intel's
+# PCS. This reads the body; a deployment must verify the quote first, exactly as sevsnp_verifier
+# verifies the SNP report before snp_anchor reads it.
+_TDREPORT = {"mrtd": 528, "mrconfigid": 576, "mrowner": 624, "mrownerconfig": 672,
+             "rtmr0": 720, "rtmr1": 768, "rtmr2": 816, "rtmr3": 864, "report_data": 128}
+# TD report body (Intel Quote v4, 584 B): tee_tcb_svn 0, mr_seam 16, mrsigner_seam 64,
+# seam_attributes 112, td_attributes 120, xfam 128, then the registers below, report_data 520.
+_QUOTE_BODY = {"mrtd": 136, "mrconfigid": 184, "mrowner": 232, "mrownerconfig": 280,
+               "rtmr0": 328, "rtmr1": 376, "rtmr2": 424, "rtmr3": 472, "report_data": 520}
+
+def parse_tdreport(b):
+    """Field view of the 1024-byte TDREPORT a TD obtains from its own TDX module."""
+    if len(b) != 1024: raise ValueError(f"not a 1024-byte TDREPORT: {len(b)}")
+    f = {k: b[o:o+48] for k, o in _TDREPORT.items() if k != "report_data"}
+    f["report_data"] = b[128:192]; f["mac"] = b[224:256]; f["kind"] = "tdreport"
+    return f
+
+def parse_tdx_quote(q):
+    """Field view of the TD report body inside a Quote v4 (48-byte header + 584-byte body)."""
+    if len(q) < 632 or int.from_bytes(q[0:2], "little") != 4:
+        raise ValueError("not a Quote v4")
+    body = q[48:632]
+    f = {k: body[o:o+48] for k, o in _QUOTE_BODY.items() if k != "report_data"}
+    f["report_data"] = body[520:584]; f["kind"] = "tdx-quote"
+    return f
+
+def tdx_anchor(f):
+    """The instance claim of a TD, or None. There is no place claim on TDX: nothing in the
+    report names the socket, and MROWNER is the host's word, not the chip's."""
+    r = f["rtmr3"]
+    if r == bytes(48): return None                       # never extended: no instance, fail closed
+    return {"instance": r, "place": None}
+
 def snp_anchor(f):
     """{"instance": REPORT_ID, "place": CHIP_ID or None}, or None if there is no instance claim.
 

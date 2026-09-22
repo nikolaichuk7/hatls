@@ -9,6 +9,24 @@
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
 
+# Run of 22 September 2026, 16:05 UTC — a TD gives itself an instance identity
+
+Two GCP `c3-standard-4` TDX guests from one Ubuntu 24.04 image (kernel 7.0.0-1011-gcp), both
+deleted after. Evidence: `evidence/tdx-rtmr-20260922T160500Z/` — a TDREPORT before and after,
+per guest, and the nonce each drew (kept only to verify the arithmetic).
+
+```
+MRTD                          identical (same image)
+RTMR3 before                  0 in both
+extend rtmr3:sha384 with 48 random bytes, once, in each guest
+RTMR3 after                   372d9c85... (a)   d3345726... (b)   distinct
+SHA-384(0 || nonce) == after  True in both     (TDG.MR.RTMR.EXTEND, as documented)
+RTMR0..2, MRTD, MROWNER...    unchanged
+```
+
+`docs/INSTANCE-IDENTITY.md` says what this does and does not give; `tdx_anchor` in
+`hatls/tee.py` reads it and fails closed on a zero RTMR3.
+
 # Runs of 22 September 2026, 15:26–15:33 UTC — what a report costs, and how many you may have
 
 `examples/e2e_timing_hw.py` against a GCP SEV-SNP guest (`hatls-e2e`, us-central1-c, chip
