@@ -1,0 +1,28 @@
+guest 136.116.53.36:8443 — real AMD SEV-SNP confidential VM
+evidence -> evidence/reattest-20260922T133416Z
+
+A. CONSTANT BINDER  (draft-fossati-seat-early-attestation Sec. 5.1 shape)
+   instance                 hatls-84 @ us-central1-c
+   two genuine reports, 1184 bytes each, emitted in ONE connection
+   round 0 authentic (VCEK -> ASK -> ARK)   True
+   round 1 authentic (VCEK -> ASK -> ARK)   True
+   instance anchor          cea42ce7994fab509216ffe48c014c95...
+   REPORT_DATA round 0      db474adb8e5027b346089780c06aa13f0ff8fc747b5da71b...
+   REPORT_DATA round 1      db474adb8e5027b346089780c06aa13f0ff8fc747b5da71b...
+   REPORT_DATA identical    True
+   whole report identical   False   (signatures are randomised)
+   fields equal in both     MEASUREMENT, CHIP_ID, REPORT_ID
+
+   Sec 8.4 attack: resend round 0's Evidence when round 1 is requested
+   binder-only appraisal    ACCEPTED  <-- the gap, measured
+
+B. CHAINED BINDER  (this repository)
+   step 0, fresh link       accepted: accepted; continuity intact
+   step 1, fresh link       accepted: accepted; continuity intact
+
+   Sec 8.4 attack: resend step 0's Evidence when step 1 is requested
+   chained appraisal        REJECTED: counter did not advance by one (replay or reorder)
+
+RESULT
+   constant binder, stale Evidence at reattestation:  accepted
+   chained  binder, stale Evidence at reattestation:  rejected

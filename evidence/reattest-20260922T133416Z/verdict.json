@@ -1,0 +1,18 @@
+{
+  "guest": "hatls-84",
+  "zone": "us-central1-c",
+  "constant_binder": {
+    "binder": "48047facac75ba7cc897bdca1e14fd5a0a0368f92d1813f87658308dc16c0f6e",
+    "report_data_round0": "db474adb8e5027b346089780c06aa13f0ff8fc747b5da71bbd1f6c1c4dbd36881654c2816f7d5e6212a2e44ce2382bf435c03ba5b1b6279070344593e31891ce",
+    "report_data_round1": "db474adb8e5027b346089780c06aa13f0ff8fc747b5da71bbd1f6c1c4dbd36881654c2816f7d5e6212a2e44ce2382bf435c03ba5b1b6279070344593e31891ce",
+    "report_data_identical": true,
+    "reports_byte_identical": false,
+    "stale_evidence_accepted": true
+  },
+  "chained_binder": {
+    "step0": "accepted; continuity intact",
+    "step1": "accepted; continuity intact",
+    "stale_evidence_accepted": false,
+    "reason": "counter did not advance by one (replay or reorder)"
+  }
+}

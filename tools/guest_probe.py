@@ -104,6 +104,25 @@ def main():
             head=bytes.fromhex(req["head"]) if req.get("head") else None
             exp=conn.export_keying_material(EXPORTER_LABEL,32,b"")
             sc =conn.export_keying_material(CONTEXT_LABEL,48,b"")      # derived, never received
+            if req.get("static"):
+                # draft-fossati-seat-early-attestation Section 5.1: the attestation binder is
+                # derived ONCE per connection and does not change for its lifetime. Emit `steps`
+                # reports that all bind that one constant value, so a Relying Party appraising
+                # only the binder has nothing to tell a fresh report from an earlier one.
+                # This is the setting of that draft's Section 8.4, on real silicon.
+                binder=intra_link(sc,tik_pub); rounds=[]
+                for counter in range(steps):
+                    rep=snp_report(report_data_for(binder,head))
+                    open(f"conn{n:02d}-static{counter}-report.bin","wb").write(rep)
+                    rounds.append({"round":counter,"binder":binder.hex(),
+                                   "report":base64.b64encode(rep).decode()})
+                blob=json.dumps({"instance":iid,"zone":zone,"static":True,"rounds":rounds}).encode()
+                conn.sendall(struct.pack(">I",len(blob))+blob)
+                json.dump(json.loads(blob),open(f"conn{n:02d}-static.json","w"))
+                print(f"conn {n}: {steps} STATIC-binder reports emitted, binder {binder.hex()[:16]}",flush=True)
+                try: conn.shutdown()
+                except Exception: pass
+                s.close(); continue
             chain=[]; prev=intra_link(sc,tik_pub)
             for counter in range(steps):
                 pl=post_link(exp,prev if counter else intra_link(sc,tik_pub),counter)
