@@ -91,6 +91,50 @@ not a guarantee: the party that would re-host a workload is the party that picks
 continuity design that works on SEV-SNP does not port to TDX by renaming a field; there the
 instance identity has to come from outside the report.
 
+## Who writes each field — and why no field can say where a key was born
+
+The same ABI table says who supplies every field of the report (descriptions verbatim):
+
+| field | written by | the ABI's words |
+|---|---|---|
+| `REPORT_DATA` (64 B) | **the guest**, at request time | "Guest-provided data." |
+| `VMPL` | the guest, at request time | "The request VMPL for the attestation report." |
+| `POLICY`, `FAMILY_ID`, `IMAGE_ID`, `HOST_DATA`, `ID_KEY_DIGEST`, `AUTHOR_KEY_DIGEST` | the hypervisor / owner, at launch | "provided at launch", "Data provided by the hypervisor at launch", "the ID block provided in SNP_LAUNCH_FINISH" |
+| `MEASUREMENT` | the firmware, over what was launched | "The measurement calculated at launch." |
+| `REPORT_ID`, `REPORT_ID_MA`, `CHIP_ID`, `PLATFORM_*`, `*_TCB`, `SIGNATURE` | the firmware | — |
+
+There is no field about any key the guest holds. The Intel TDREPORT is the same shape: measurement
+registers, TCB, and 64 bytes of `REPORTDATA` that the TD supplies. So on both platforms the
+hardware attestation key signs a **fixed-layout structure**, and the only channel through which a
+statement such as "this TLS key was generated inside and is non-exportable" can reach the
+signature is the guest's own 64 bytes.
+
+That matters for the remedy draft-fossati-seat-early-attestation-07 §8.2 relies on against a
+stolen key imported into a second TEE: key-attribute claims per draft-reddy-rats-key-binding.
+That profile is explicit about how such claims must be carried (§8.3):
+
+> *"An alternative construction sometimes used in attestation protocols is to build an unsigned
+> claims set (UCCS) containing the Subject Public Key and associated attributes, hash it, and
+> supply the hash as a challenge to an existing attestation interface. […] a TEE-bound process
+> acting as a proxy could forward a fabricated UCCS on behalf of an untrusted caller, causing the
+> attested environment to sign claims it did not generate and cannot verify. This profile instead
+> requires the Attestation Key (AK) to directly sign the EAT Claims Set containing the
+> key-attributes claim and the Subject Public Key in cnf."*
+
+The construction it rejects is the only one a SEV-SNP or TDX guest has with the platform's AK.
+Implementing the profile there needs a second attesting component inside the guest with its own
+AK — a vTPM, or measured guest software — whose identity the platform report binds through
+`REPORT_DATA`, and whose *word* the key-attribute claim then is. The hardware never asserts key
+provenance; software does, and the Relying Party must appraise that software (its measurement,
+its endorsement) to believe it. That is what §8.2 itself concedes — the attributes are "only as
+trustworthy as that environment itself" — made concrete: on these two platforms "that
+environment" is not the chip but a program running on it.
+
+This is the reason a continuity design cannot rest on assertions. An observation-based check —
+the same identity key presenting from two instances, seen by a Relying Party that keeps the
+first instance on record — needs nothing the guest says about its key; it needs only the two
+`REPORT_ID`s the firmware wrote.
+
 ## What this means for the three open questions
 
 | question | on real silicon |

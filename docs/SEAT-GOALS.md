@@ -67,6 +67,16 @@ inputs to the link.
 *Proved.* `formal/hatls-chain.pv`, third query: anything accepted was attested by the **enrolled**
 instance, with the identity key public to the attacker throughout.
 
+*A structural note on the alternative.* The other route to "RA adds to authentication" is to have
+the Evidence *assert* the key's provenance — non-exportable, generated inside — as
+draft-fossati-seat-early-attestation §8.2 proposes via draft-reddy-rats-key-binding. On SEV-SNP
+and TDX no report field carries such an attribute; the hardware AK signs a fixed structure whose
+only guest-supplied bytes are `REPORT_DATA`, and the key-binding profile's own §8.3 rejects
+carrying claims through that channel, requiring the AK to sign the claims set directly. So on
+these platforms the assertion route needs a second, software attester inside the guest and trust
+in its measurement; the observation route above needs only two firmware-written `REPORT_ID`s
+(`docs/INSTANCE-IDENTITY.md`, "Who writes each field").
+
 *Not done.* The composition property as [ID-Crisis] states it — a theorem over TLS 1.3 itself
 with attestation composed in — is not stated as a query. TLS is outside our model; the exporter is
 an assumption ("a fresh secret shared by exactly the two endpoints of one session"), not a derived
