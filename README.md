@@ -44,11 +44,13 @@ HATLS narrows the attacker, layer by measured layer:
 | Open an independent session to another party | shared mandate keyed by identity, not connection | prevent |
 | Replay or reorder within a session | continuity chain + counter | detect, same message |
 | Relay a genuine session | exporter binding | detect |
-| Be a **physical insider on the exact chip** | liveness beacons: the chip can emit one every **7.96 ms**, so that is how finely an interruption can be seen | narrowed, not closed |
+| Be a **physical insider on the exact chip** | liveness beacons: the chip answers in **7.96 ms**, but the host lets a guest have only ~10 reports per 10 s, so an interruption is seen at about one-second resolution on GCP (`docs/RUNTIME-COST.md`) | narrowed, not closed |
 
 The only survivor is an insider physically at the enrolled chip. We do not claim to eliminate it,
 and we are careful about what the 7.96 ms means: it is how fast the chip can produce a fresh
-liveness beacon, which bounds the **resolution of detection**, not the attacker's window. While the
+liveness beacon, which bounds the **resolution of detection**, not the attacker's window. And on GCP
+the host caps a guest at about ten reports per ten seconds, so the resolution actually available
+is about a second, not eight milliseconds (`docs/RUNTIME-COST.md`). While the
 key is in cleartext in guest memory to sign at all, that window is the life of the process.
 
 There is also a platform where the central guarantee does not hold at all, and it is named up
@@ -126,7 +128,9 @@ act, so a stolen key cannot be turned into a weapon against its owner.
 Full design in [docs/DESIGN.md](docs/DESIGN.md); the layered threat model in
 [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md); why the working group needs this in
 [docs/GAP-ANALYSIS.md](docs/GAP-ANALYSIS.md); the hardware runs in
-[docs/HARDWARE-RESULTS.md](docs/HARDWARE-RESULTS.md).
+[docs/HARDWARE-RESULTS.md](docs/HARDWARE-RESULTS.md); and, goal by goal against the working
+group's own list in draft-ietf-seat-use-cases-01 Section 4 — including the three goals this does
+not address — [docs/SEAT-GOALS.md](docs/SEAT-GOALS.md).
 
 ## Repository layout
 
@@ -135,7 +139,7 @@ hatls/         the protocol + TEE backends (mock for local, SEV-SNP for hardware
 tools/         probes that run INSIDE a confidential guest
 examples/      operator-side: the demo, the attack playground, the hardware runner
 scripts/       launch a real SEV-SNP guest
-docs/          design, threat model, gap analysis, hardware results
+docs/          design, threat model, gap analysis, hardware results, the SEAT goals statement
 evidence/      real attestation verdicts from the hardware runs
 ```
 
@@ -151,7 +155,7 @@ stopped**, a real TLS relay on localhost, and a benchmark that reproduces every 
 |---|---|
 | Does it slow the connection? | one attestation report at setup (~8 ms, once); after that the per-step link is **2.5 microseconds** (~400k/sec) |
 | How fast can the mandate verify? | **~1 ms per check incl. ECDSA verify, ~920 checks/sec per core**, scales with cores |
-| Liveness beacon cost on real silicon | **7.96 ms median**, up to ~125/sec; you emit one per policy interval (e.g. once a second), not per packet |
+| Liveness beacon cost on real silicon | **7.96 ms median** per report, but **throttled by the host to ~10 per 10 s** on GCP (every 10th waits ~10 s; `docs/RUNTIME-COST.md`); you emit one per policy interval (e.g. once a second), not per packet |
 | Will it reject legitimate users? | legitimate reconnects from the enrolled instance: **0 false rejects / 500** (no migration in those 500; a migration to other silicon is the separate false-positive risk below) |
 | Will an impersonation slip through? | stolen key on a different instance: **0 missed / 500** |
 | Does normal in-session traffic break the chain? | **0 false breaks / 500** |
@@ -253,19 +257,25 @@ mandate accepts. This is an open item, stated rather than hidden.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
   launcher deliberately ships one key to two guests, which is the stolen-key model this repository
   demonstrates against.
-- **The binder and the mandate's appraisal of one step are machine-proved. The rest is not.**
-  Out of the model: the transfer grant, revocation, the ledger, receipts, the hardware-witnessed
-  head, cross-mandate detection, and TLS. ProVerif 2.05 proves, against
-  a Dolev-Yao attacker with the identity key handed to it in the clear and unboundedly many
-  parallel sessions, that anything the mandate accepts was attested by that instance for the
-  exporter the mandate derived itself, by the instance it enrolled, and under the session it was
-  produced for — and that the honest run is still reachable, so none of it holds vacuously. The
-  same model with the v0.1 defect put back is included, and ProVerif finds the relay in it: that
-  is the check that the model is sensitive to the property rather than agreeable about everything.
-  See [formal/](formal/). **Not** covered: TLS itself, the transfer grant, revocation, the ledger
-  and its receipts, and the hardware-witnessed head.
-- The early binder runs over a session context both endpoints derive independently, not over the
-  true TLS handshake transcript, which needs a hook into the TLS stack.
+- **The binder, the mandate's appraisal of one step, and the ORDER of a three-link chain are
+  machine-proved. The rest is not.** Out of the model: the transfer grant, revocation, the ledger,
+  receipts, the hardware-witnessed head, cross-mandate detection, and TLS. ProVerif 2.05 proves,
+  against a Dolev-Yao attacker with the identity key handed to it in the clear, a thief's TEE that
+  signs anything, the thief as TLS peer of sessions with both ends, and unboundedly many parallel
+  sessions, that anything the mandate accepts at position *n* was attested by the enrolled
+  instance, for the exporter the mandate derived itself, under the session it was produced for,
+  **at position *n* and before acceptance** — non-injectively and injectively — and that the
+  honest run is still reachable, so none of it holds vacuously. Two broken models are included as
+  checks that the prover is sensitive rather than agreeable: with the v0.1 defect put back it finds
+  the relay; with the binder held constant for the connection it finds the resend of position 0's
+  Evidence at position 1, which is draft-fossati-seat-early-attestation-07 Section 8.4 stated in
+  prose. See [formal/](formal/).
+- HATLS's own first link runs over a session context both endpoints derive independently, not over
+  the true TLS handshake transcript. The hook that would allow the transcript now exists —
+  `hatls/transcript.py` records ClientHello and ServerHello over memory BIOs and computes
+  draft-fossati-seat-early-attestation's Section 5.1.1 binder from them, byte-checked against RFC
+  8448, and the reattestation experiment runs on it — but moving HATLS's first link onto it is a
+  protocol change not yet made.
 
 ## Relationship to IETF
 

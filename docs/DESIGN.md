@@ -72,8 +72,9 @@ view is fooled. Two things, and only two, address the key itself:
 2. The mandate -- and this is the part that is ours to contribute. A stolen key used in a second
    TEE produces a SECOND continuity stream under the same identity. A mandate that releases/keeps
    a key alive only while ONE continuous, ordered, fresh chain exists for that identity detects the
-   fork and revokes. We measured exactly this shape in the product's failover-negatives drill: two
-   endpoints presenting one sealed identity -> the second is declined.
+   fork and revokes. This shape is measured in this repository on live SEV-SNP: two instances
+   presenting one identity key -> the second is declined on its first message
+   (`docs/HARDWARE-RESULTS.md`, runs of 21 and 22 September 2026).
 
 So the honest guarantee of "binder + chain + mandate" is not "no substitution". It is
 **"no substitution without detection, and no silent success"**: the cryptography stops relay and
@@ -97,8 +98,13 @@ measurements push back:
   bytes). Not a database -- a register.
 
 So the weight is one HKDF at t2, one per re-attestation, and ~40 bytes of memory per connection.
-The mandate's cost (our measured continuity commit, 0.26-1.42 s) sits inside the key-release phase,
-dominated by appraisal (6.8-14.4 s), i.e. off the latency-critical path.
+Measured in this repository on the real reports it ships (`examples/cost.py`, reproducible from a
+clone): deriving a link is 2.5 µs (median, n=20000); the mandate's whole step on a mock chip is
+1–2.5 ms depending on the OpenSSL build (1.2 ms here, 2.3 ms in a fresh venv), most of it the
+mock's ECDSA; appraising a genuine SEV-SNP report is 1.6 ms warm; cold it is
+whatever AMD's KDS takes to serve the VCEK and chain that day (0.5 s and 7.4 s in two consecutive
+measurements) — a cost every SEV-SNP appraisal pays once per chip and TCB, and the only part of a
+step that is not microseconds.
 
 ## Is this new?
 

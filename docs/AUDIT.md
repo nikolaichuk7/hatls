@@ -234,3 +234,14 @@ succeeds on three distinct live chips; a single flipped `MEASUREMENT` byte is re
   defect is fixed, not enough to stand as a standard's evidence base.
 - Contention policy: recording a dispute is the right primitive, but who resolves it, on what
   evidence, and in what time bound is unspecified.
+
+
+## 22 September 2026 — our own maximum was in the file
+
+`evidence/liveness-20260921T141726Z/liveness.json` records `beacon_ms_median: 7.96` and
+`beacon_ms_max: 10237.02`. Every document quoted the median, one called it "up to ~125/sec", and
+none mentioned the maximum. The maximum is the host's throttle on SEV-SNP guest requests — ten
+reports per ten seconds on GCP, every tenth waiting ~10 s, confirmed on a fresh guest with 45
+back-to-back reports and in an end-to-end run where five of twenty connections hit it
+(`docs/RUNTIME-COST.md`). Corrected wherever the beacon was presented as a rate. The lesson is the
+old one: read the whole output, not the number you hoped for.

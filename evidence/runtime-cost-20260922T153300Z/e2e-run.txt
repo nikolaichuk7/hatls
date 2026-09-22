@@ -1,0 +1,15 @@
+guest 35.193.219.93:8443, 20 connections x 3 links, client on the open Internet
+
+connection 1 (cold: VCEK + chain fetched from AMD KDS during the first appraisal):
+   appraise link 0                8.3 ms
+
+connections 2..20 (warm), median [min .. max]:
+   TCP connect                           40.9 ms  [35.4 ms .. 126.9 ms]
+   TCP + TLS 1.3 handshake               89.1 ms  [82.6 ms .. 191.8 ms]
+   request -> 3 links back              109.1 ms  [105.0 ms .. 10349.6 ms]
+   chip report generation (in guest)      7.8 ms  [7.3 ms .. 10248.4 ms]   n=57
+   appraise one link (warm)               5.5 ms  [2.2 ms .. 8.4 ms]
+   FIRST ACCEPTED LINK, from SYN        318.3 ms  [235.7 ms .. 10483.3 ms]
+   response bytes (JSON, base64)         5199
+
+evidence -> evidence/e2e-timing-20260922T152650Z/timings.json

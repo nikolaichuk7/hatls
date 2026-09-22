@@ -1,0 +1,347 @@
+{
+ "guest": "35.193.219.93",
+ "connections": 20,
+ "links": 3,
+ "runs": [
+  {
+   "connect": 0.044307790929451585,
+   "connect+handshake": 0.10149962501600385,
+   "request->response": 0.16169587499462068,
+   "gen_ms_per_link_guest": [
+    7.487,
+    7.303,
+    7.435
+   ],
+   "appraise_per_link": [
+    0.008291875012218952,
+    0.003653292078524828,
+    0.0032865420216694474
+   ],
+   "first_link_total": 0.31582591601181775,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.04084824991878122,
+   "connect+handshake": 0.08452479203697294,
+   "request->response": 0.10500441689509898,
+   "gen_ms_per_link_guest": [
+    7.89,
+    7.618,
+    7.688
+   ],
+   "appraise_per_link": [
+    0.0052604160737246275,
+    0.0036023330176249146,
+    0.0033014999935403466
+   ],
+   "first_link_total": 0.23569087497889996,
+   "bytes_response": 5198
+  },
+  {
+   "connect": 0.040020624990575016,
+   "connect+handshake": 0.1631667079636827,
+   "request->response": 0.11742708296515048,
+   "gen_ms_per_link_guest": [
+    7.938,
+    7.383,
+    8.275
+   ],
+   "appraise_per_link": [
+    0.004782458068802953,
+    0.0030975419795140624,
+    0.002972584101371467
+   ],
+   "first_link_total": 0.3254289160249755,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.040874209022149444,
+   "connect+handshake": 0.08569225005339831,
+   "request->response": 10.335827457951382,
+   "gen_ms_per_link_guest": [
+    7.785,
+    10234.971,
+    7.756
+   ],
+   "appraise_per_link": [
+    0.007560374913737178,
+    0.0043895000126212835,
+    0.0037217920180410147
+   ],
+   "first_link_total": 10.469996124971658,
+   "bytes_response": 5203
+  },
+  {
+   "connect": 0.04092879197560251,
+   "connect+handshake": 0.09169150004163384,
+   "request->response": 0.11876879201736301,
+   "gen_ms_per_link_guest": [
+    7.583,
+    7.87,
+    7.836
+   ],
+   "appraise_per_link": [
+    0.004997374955564737,
+    0.004409541958011687,
+    0.004124833038076758
+   ],
+   "first_link_total": 0.25643541698809713,
+   "bytes_response": 5198
+  },
+  {
+   "connect": 0.12694275006651878,
+   "connect+handshake": 0.08812687499448657,
+   "request->response": 0.10897254198789597,
+   "gen_ms_per_link_guest": [
+    7.607,
+    7.834,
+    7.895
+   ],
+   "appraise_per_link": [
+    0.007759541971608996,
+    0.004499709000810981,
+    0.004015791928395629
+   ],
+   "first_link_total": 0.33254541701171547,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.039589666994288564,
+   "connect+handshake": 0.09143625001888722,
+   "request->response": 10.302160333027132,
+   "gen_ms_per_link_guest": [
+    7.802,
+    7.837,
+    10202.729
+   ],
+   "appraise_per_link": [
+    0.002554291975684464,
+    0.002035417011938989,
+    0.0017552920617163181
+   ],
+   "first_link_total": 10.43579320795834,
+   "bytes_response": 5203
+  },
+  {
+   "connect": 0.04694216698408127,
+   "connect+handshake": 0.08264462498482317,
+   "request->response": 0.10718870896380395,
+   "gen_ms_per_link_guest": [
+    7.601,
+    7.469,
+    7.595
+   ],
+   "appraise_per_link": [
+    0.0029635420069098473,
+    0.0024539590813219547,
+    0.0022535420721396804
+   ],
+   "first_link_total": 0.23976262600626796,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.1135095419595018,
+   "connect+handshake": 0.19175216602161527,
+   "request->response": 0.10909554199315608,
+   "gen_ms_per_link_guest": [
+    7.637,
+    7.272,
+    7.742
+   ],
+   "appraise_per_link": [
+    0.003795207943767309,
+    0.00315745803527534,
+    0.003191625000908971
+   ],
+   "first_link_total": 0.418207332957536,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.05293487501330674,
+   "connect+handshake": 0.15315449994523078,
+   "request->response": 0.10497679200489074,
+   "gen_ms_per_link_guest": [
+    7.675,
+    7.409,
+    7.578
+   ],
+   "appraise_per_link": [
+    0.002967500011436641,
+    0.0025801670271903276,
+    0.002221749979071319
+   ],
+   "first_link_total": 0.3140763760311529,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.04043062496930361,
+   "connect+handshake": 0.08570108294952661,
+   "request->response": 10.349612665944733,
+   "gen_ms_per_link_guest": [
+    10248.431,
+    7.492,
+    7.833
+   ],
+   "appraise_per_link": [
+    0.007482832996174693,
+    0.004572249948978424,
+    0.0037458749720826745
+   ],
+   "first_link_total": 10.483256664942019,
+   "bytes_response": 5203
+  },
+  {
+   "connect": 0.035404167021624744,
+   "connect+handshake": 0.08628100005444139,
+   "request->response": 0.10830145794898272,
+   "gen_ms_per_link_guest": [
+    7.919,
+    8.146,
+    7.89
+   ],
+   "appraise_per_link": [
+    0.006447582971304655,
+    0.00413037498947233,
+    0.0035803329665213823
+   ],
+   "first_link_total": 0.23646737495437264,
+   "bytes_response": 5198
+  },
+  {
+   "connect": 0.04013274994213134,
+   "connect+handshake": 0.16343554202467203,
+   "request->response": 0.10913687502034009,
+   "gen_ms_per_link_guest": [
+    7.972,
+    7.707,
+    7.871
+   ],
+   "appraise_per_link": [
+    0.0060797089245170355,
+    0.004496749956160784,
+    0.003771499963477254
+   ],
+   "first_link_total": 0.3188183339079842,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.040783415897749364,
+   "connect+handshake": 0.0891302089439705,
+   "request->response": 10.339723458047956,
+   "gen_ms_per_link_guest": [
+    7.809,
+    10238.699,
+    7.631
+   ],
+   "appraise_per_link": [
+    0.008394000004045665,
+    0.004511083010584116,
+    0.003968416014686227
+   ],
+   "first_link_total": 10.478069582954049,
+   "bytes_response": 5203
+  },
+  {
+   "connect": 0.040789791964925826,
+   "connect+handshake": 0.08787699998356402,
+   "request->response": 0.10587133397348225,
+   "gen_ms_per_link_guest": [
+    7.337,
+    7.404,
+    7.415
+   ],
+   "appraise_per_link": [
+    0.00629116699565202,
+    0.0043872910318896174,
+    0.0034872499527409673
+   ],
+   "first_link_total": 0.24087583494838327,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.09694591700099409,
+   "connect+handshake": 0.08981237490661442,
+   "request->response": 0.10992729209829122,
+   "gen_ms_per_link_guest": [
+    7.663,
+    7.471,
+    8.265
+   ],
+   "appraise_per_link": [
+    0.002557957894168794,
+    0.0024658750044181943,
+    0.002410207991488278
+   ],
+   "first_link_total": 0.2993933749385178,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.03997154196258634,
+   "connect+handshake": 0.08416458405554295,
+   "request->response": 10.305451624910347,
+   "gen_ms_per_link_guest": [
+    8.023,
+    7.522,
+    10203.482
+   ],
+   "appraise_per_link": [
+    0.007888082996942103,
+    0.004404334002174437,
+    0.003748625051230192
+   ],
+   "first_link_total": 10.43751249986235,
+   "bytes_response": 5203
+  },
+  {
+   "connect": 0.042450791923329234,
+   "connect+handshake": 0.09735475003253669,
+   "request->response": 0.1057944999774918,
+   "gen_ms_per_link_guest": [
+    7.891,
+    8.248,
+    7.852
+   ],
+   "appraise_per_link": [
+    0.0022464169887825847,
+    0.0016531669534742832,
+    0.0015980000607669353
+   ],
+   "first_link_total": 0.24791683396324515,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.10324754205066711,
+   "connect+handshake": 0.09428779210429639,
+   "request->response": 0.10651083395350724,
+   "gen_ms_per_link_guest": [
+    8.273,
+    7.846,
+    7.888
+   ],
+   "appraise_per_link": [
+    0.0057855830527842045,
+    0.0017585830064490438,
+    0.0016772500239312649
+   ],
+   "first_link_total": 0.31007166707422584,
+   "bytes_response": 5199
+  },
+  {
+   "connect": 0.04178395797498524,
+   "connect+handshake": 0.08507333300076425,
+   "request->response": 0.18582445802167058,
+   "gen_ms_per_link_guest": [
+    7.427,
+    7.816,
+    7.526
+   ],
+   "appraise_per_link": [
+    0.0054959169356152415,
+    0.0017699580639600754,
+    0.0017278339946642518
+   ],
+   "first_link_total": 0.3182510829064995,
+   "bytes_response": 5199
+  }
+ ]
+}

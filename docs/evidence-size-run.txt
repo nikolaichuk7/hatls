@@ -1,0 +1,20 @@
+initial congestion window: 10 x 1448 B = 14480 B
+
+baseline www.ietf.org       server flight  4872 B = 4 segments  (PQ hybrid ServerHello, Certificate 3416 B)
+baseline www.amazon.com     server flight  5766 B = 4 segments  (PQ hybrid ServerHello, Certificate 4310 B)
+baseline www.microsoft.com  server flight  7358 B = 6 segments  (PQ hybrid ServerHello, Certificate 5902 B)
+
+Evidence in the server Certificate message (early attestation)    bytes         ietf.org       amazon.com    microsoft.com
+                                                                             flight/segs      flight/segs      flight/segs
+  SEV-SNP report only (verifier fetches VCEK+chain from AMD KDS)   1184   6096/5         6990/5         8582/6      
+  SEV-SNP report + VCEK leaf                                       2535   7447/6         8341/6         9933/7      
+  SEV-SNP report + VCEK + ASK + ARK (SNP_GET_EXT_REPORT table)     5851  10763/8        11657/9        13249/10     
+  SEV-SNP report + VLEK leaf (AWS; chain fetched)                  2503   7415/6         8309/6         9901/7      
+  TDX quote v4 (QE report + PCK chain included)                    8000  12912/9        13806/10       15398/11+1RTT
+
+Post-handshake (expat, or the chain here): the first flight is the baseline; the same bytes travel
+after the handshake, on an established connection, where they cost bandwidth but not the
+initial-window round trip.
+
+Client attestation (client Certificate carries Evidence): the client's second flight is otherwise
+a few hundred bytes, so none of these Evidence sizes crosses the window there on its own.

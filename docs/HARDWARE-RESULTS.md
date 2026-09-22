@@ -1,5 +1,5 @@
-> **Read [AUDIT.md](AUDIT.md) first.** The run immediately below is the current one, made on
-> 21 Sep 2026 with identity anchored on the instance claim. **Everything after it is a historical record of earlier runs,**
+> **Read [AUDIT.md](AUDIT.md) first.** The runs at the top are the current ones (22 Sep 2026:
+> reattestation freshness; 21 Sep 2026: identity anchored on the instance claim). **Everything after it is a historical record of earlier runs,**
 > kept unedited because evidence should not be rewritten after the fact.
 >
 > Those earlier runs were produced by v0.1, whose client read the TLS exporter and the identity key
@@ -8,6 +8,120 @@
 > two distinct chips was genuinely detected. What does not: any relay resistance they seem to
 > imply, because the client of the day could not have detected a relay; and the revocation of guest
 > A once guest B appeared, which is now understood as an attack on the victim, not a success.
+
+# Run of 22 September 2026, 16:05 UTC — a TD gives itself an instance identity
+
+Two GCP `c3-standard-4` TDX guests from one Ubuntu 24.04 image (kernel 7.0.0-1011-gcp), both
+deleted after. Evidence: `evidence/tdx-rtmr-20260922T160500Z/` — a TDREPORT before and after,
+per guest, and the nonce each drew (kept only to verify the arithmetic).
+
+```
+MRTD                          identical (same image)
+RTMR3 before                  0 in both
+extend rtmr3:sha384 with 48 random bytes, once, in each guest
+RTMR3 after                   372d9c85... (a)   d3345726... (b)   distinct
+SHA-384(0 || nonce) == after  True in both     (TDG.MR.RTMR.EXTEND, as documented)
+RTMR0..2, MRTD, MROWNER...    unchanged
+```
+
+`docs/INSTANCE-IDENTITY.md` says what this does and does not give; `tdx_anchor` in
+`hatls/tee.py` reads it and fails closed on a zero RTMR3.
+
+# Runs of 22 September 2026, 15:26–15:33 UTC — what a report costs, and how many you may have
+
+`examples/e2e_timing_hw.py` against a GCP SEV-SNP guest (`hatls-e2e`, us-central1-c, chip
+`75bbd2bb8dfeeb00`), and two in-guest bursts, one on that guest and one on a GCP TDX guest
+(`tdx-lat`, c3-standard-4, us-central1-a). Both deleted after. Evidence:
+`evidence/runtime-cost-20260922T153300Z/`. Full write-up: `docs/RUNTIME-COST.md`.
+
+```
+SEV-SNP report, in guest        7.7 ms median (n=45)   every 10th: 10.23-10.26 s  (host throttle,
+                                                        ~10 per 10 s; the driver retries every 2 s)
+TDX TDREPORT, in guest          6 us median (n=200)     local, MAC-bound, not remotely verifiable
+TDX quote via host QGS          38.9 ms median (n=100)  no throttle in 100; 8000 B each
+
+end to end, Austin -> us-central1, 20 connections x 3 links, medians of 2..20:
+  TCP connect 40.9 ms | TCP+TLS 1.3 89.1 ms | request -> 3 links 109.1 ms | appraise (warm) 5.5 ms
+  FIRST ACCEPTED LINK from SYN: 318 ms   (5 of 20 connections hit the throttle: 10.4-10.5 s)
+```
+
+This run also corrected a claim of ours: the 21 September liveness file already recorded a
+10 237 ms maximum next to its 7.96 ms median, and the median had been presented as a rate.
+
+# Run of 22 September 2026, 14:07 UTC — reattestation freshness, with the draft's own binder
+
+`examples/reattest_freshness_hw.py`, one GCP `n2d-standard-2` SEV-SNP guest (`hatls-84b`,
+us-central1-c, chip `75bbd2bb8dfeeb00`), deleted after the run. Evidence:
+`evidence/reattest-20260922T140735Z/` — the four 1184-byte reports, the ClientHello and
+ServerHello as recorded on the verifier's side, `run.txt`, `verdict.json`.
+
+draft-fossati-seat-early-attestation-07 Section 8.4 says an attester "could resend Evidence
+generated earlier in the connection in response to a later reattestation request, since the
+binder still matches and the Relying Party has no way to distinguish it from fresh Evidence",
+and that "the mechanism will be defined in future revisions". This run measures both halves.
+
+**A. The draft's binder, exactly as Section 5.1.1 defines it.** Both ends run TLS 1.3 over
+memory BIOs and record the wire, so each can compute `Hash(ClientHello..ServerHello)` from its
+own view; the binder is `HKDF-Expand-Label` in the `tls13 ` label space with the suite's hash
+(`TLS_AES_256_GCM_SHA384`, so SHA-384 and a 48-byte binder), over that transcript hash and the
+server's SubjectPublicKeyInfo. The verifier derives it from its own recording and the
+certificate the handshake proved possession of (Section 5.1.2), and compares it to what the
+chip signed. `hatls/transcript.py` is checked byte for byte against the RFC 8448 trace.
+
+```
+suite / hash                TLS_AES_256_GCM_SHA384 / sha384
+ClientHello, ServerHello    224 + 122 bytes, seen on OUR side of the wire
+transcript sha256 agrees    True
+binder, ours == guest's     True   (48 bytes, 37ea07e49dc00ca9b2cff274...)
+round 0 authentic + binds   True   (VCEK -> ASK -> ARK; REPORT_DATA == our binder)
+round 1 authentic + binds   True
+REPORT_DATA identical       True
+whole report identical      False   (signatures are randomised)
+fields equal in both        MEASUREMENT, CHIP_ID, REPORT_ID
+
+Sec 8.4 attack: resend round 0's Evidence when round 1 is requested
+Sec 5.1.2 appraisal         ACCEPTED
+```
+
+Two genuine, separately signed reports from one connection carry byte-identical `REPORT_DATA`.
+A Relying Party appraising the binder has nothing to tell them apart by. Section 8.4, measured.
+
+After the run the binder was re-derived a third way — `cryptography`'s `HKDFExpand` over the
+saved `client-hello.bin`, `server-hello.bin` and the guest certificate's SPKI — and reproduces
+`37ea07e4…`; it sits at offset `0x50` of both saved reports, zero-padded to 64 bytes.
+
+**B. The chained binder.** Same guest, same silicon, `post_link = HKDF(exporter, prev_link ‖ counter)`:
+
+```
+step 0, fresh link          accepted: accepted; continuity intact
+step 1, fresh link          accepted: accepted; continuity intact
+Sec 8.4 attack: resend step 0's Evidence when step 1 is requested
+chained appraisal           REJECTED: counter did not advance by one (replay or reorder)
+```
+
+A chained link is not merely fresh, it is **positioned**: link *n* cannot stand in for link
+*n+1*. An exchange-specific binder of the kind Section 8.4 sketches would give freshness but
+would still need ordering added on top, because two independent fresh binders say nothing
+about which came first. The same property is proved in `formal/hatls-chain.pv`, and the prover
+finds the Section 8.4 trace in `formal/hatls-constant-binder.pv`.
+
+**Scope.** The binder is placed raw in `REPORT_DATA`, left-aligned and zero-padded: the draft
+fixes no SEV-SNP encoding, this is the most literal reading of "as a nonce value", and any
+deterministic encoding gives the same result. HelloRetryRequest handshakes are refused, not
+modelled. This is not an argument against early attestation: the chain sits on top of either
+transport.
+
+**Earlier the same day, 13:34 UTC** (`evidence/reattest-20260922T133416Z/`): the same
+experiment with a constant binder derived from the session exporter rather than the transcript
+— an analogue, labelled as such — gave the same two verdicts on guest `hatls-84`, same chip.
+That run also found the guest probe had been unable to answer any connection since v0.2.0
+(a swallowed assignment; see `tests/test_guest_probe_agrees.py`). Kept as the record of how the
+result was reached.
+
+The relay defence was re-run against the rebuilt probe (`evidence/relay-hw-20260922T140812Z/`):
+enrolled, two links accepted direct, relay holding the guest's real stolen key declined on link
+0. `hatls-84b` reports the same `CHIP_ID` as the morning's `hatls-84` and a different
+`REPORT_ID` (`7d8866f8…` vs `cea42ce7…`): the same silicon, a new instance.
 
 # Run of 21 September 2026, 20:47 UTC — AWS: the instance anchor where the silicon anchor is gone
 

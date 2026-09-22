@@ -1,0 +1,14 @@
+suite TLS_AES_256_GCM_SHA384; ClientHello1 238 B, HelloRetryRequest 88 B, ClientHello2 512 B, ServerHello 187 B
+
+the Section 5.1.1 binder under each reading of 'ClientHello...ServerHello' (one run):
+  (a) retry ignored:       Hash(CH1 || SH)                           87b5a50aadee12e5f5a894dd231e3e76...
+  (b) messages as sent:    Hash(CH1 || HRR || CH2 || SH)             d940a36b2ac840ca2f636c171ce7ccb8...
+  (c) RFC 8446 4.4.1:      Hash(msg_hash(CH1) || HRR || CH2 || SH)   b20b756faf72622a4acd3fc3328c6271...
+  (d) 'the' CH is CH2:     Hash(CH2 || SH)                           7890202ece30ff5f4d7b5e4cde62a700...
+
+  distinct binders from the four readings: 4 of 4
+
+  over 200 HelloRetryRequest handshakes: four distinct binders in 200 of 200 runs
+  (the values differ every run -- fresh randoms -- the invariant is that the readings never coincide)
+
+  control, both ends X25519: HelloRetryRequest occurred: False   (must be False)

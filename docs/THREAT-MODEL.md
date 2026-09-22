@@ -126,7 +126,9 @@ and extract its key in use without interrupting it." Against even that:
 
 - **Liveness**: two live streams under one enrolled identity are a conflict the mandate sees (same
   chip cannot serve two ordered chains without a counter collision). Interrupting the chip to seize
-  it breaks the chain — the mandate sees the gap (our failover drills measure this as RTO).
+  it breaks the chain — the mandate sees the gap, at a resolution bounded by how fast the chip
+  can emit a fresh beacon — 7.96 ms per report, but the host throttles a guest to ~10 reports per
+  10 s on GCP, so about one second in practice (`docs/RUNTIME-COST.md`).
 - **Place**: the enrolled chip is in one location. A geographic Attestation Result (our geoar work)
   lets a policy require that location, so a key used from elsewhere is rejected even on the right
   chip class.

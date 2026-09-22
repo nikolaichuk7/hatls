@@ -1,0 +1,4 @@
+{
+ "method": "two GCP c3-standard-4 TDX guests from one Ubuntu 24.04 image, kernel 7.0.0-1011-gcp; each: TDREPORT, then write 48 random bytes to /sys/class/misc/tdx_guest/measurements/rtmr3:sha384 (tsm-mr -> TDG.MR.RTMR.EXTEND), then TDREPORT again; both guests deleted",
+ "note": "the nonces are recorded here only to verify the extend arithmetic; a deployment discards the nonce after extending"
+}

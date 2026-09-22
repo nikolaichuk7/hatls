@@ -1,0 +1,35 @@
+openssl: OpenSSL 3.6.4 25 Aug 2026 (Library: OpenSSL 3.6.4 25 Aug 2026)
+
+--- connection 1: full handshake, obtain a session ticket ---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Early data was not sent
+
+--- connection 2: resume, and send 0-RTT early data ---
+Reused, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Early data was accepted
+
+--- handshake messages, connection 1 (full) ---
+  server gets    ClientHello
+  server sends   ServerHello
+  server sends   EncryptedExtensions
+  server sends   Certificate
+  server sends   CertificateVerify
+  server sends   Finished
+  server gets    Finished
+  server sends   NewSessionTicket
+  server sends   NewSessionTicket
+
+--- handshake messages, connection 2 (resumed) ---
+  server gets    ClientHello
+  server sends   ServerHello
+  server sends   EncryptedExtensions
+  server sends   Finished
+  server gets    EndOfEarlyData
+  server gets    Finished
+  server sends   NewSessionTicket
+
+--- Certificate messages (exactly that message) per handshake ---
+  connection 1 (full):    1
+  connection 2 (resumed): 0
+
+The extension of Section 4.1 lives in the Certificate message. In the resumed handshake there is none.
