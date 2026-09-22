@@ -1,0 +1,49 @@
+genuine SEV-SNP reports shipped in evidence/: 87 distinct
+
+1. THE SIGNER
+   s >= n/2 (high-S)                    42
+   s <  n/2 (low-S)                     45
+   r or s out of range                  0
+   -> a low-S canonicalising signer produces 0 high-S; AMD's firmware produces them at the
+      rate of an unconstrained signer.
+   distinct r values                    87 of 87   (repeated r: 0 -- a repeated nonce would leak the key)
+   r >= n/2                             43 of 87   (uniform expectation ~43)
+
+2. RANDOMISED SIGNING
+   bodies that appear more than once    2
+   of those, with DIFFERENT signatures  2
+   -> a deterministic signer (RFC 6979) would sign an identical body identically.
+
+3. THE FLIP, VERIFIED WITH hatls.tee.sevsnp_verifier (signature + AMD chain + REPORT_DATA)
+   reports tried                        75   (skipped 12 VLEK reports whose run shipped no leaf)
+   original verifies                    75 of 75
+   flipped (r, n-s) verifies            75 of 75
+
+   example, 20260921T135804Z/guestA.json:
+     original sha256                    a2c8d25ac6eb60af1de72c1f7efeb567...
+     forged   sha256                    35481e15866cf9904296b9eb121b6f96...
+     bytes differ                       True
+     body (0x000..0x2A0) identical      True
+     verifier's anchor for the forgery  instance fcc980b9e76b854a... -- the same instance
+     no AMD key was used.
+
+4. CONTROLS
+   s replaced by n-s+1 (not a conjugate)  verifies: False    (must be False)
+   one bit of the body flipped           verifies: False    (must be False)
+   a verifier that enforced low-S would REJECT 42 of 87 GENUINE reports here: the
+   remedy that works for Bitcoin is not available against a signer that emits high-S itself.
+   The remedy left is to identify evidence by its body.
+
+5. INTEL TDX QUOTES  (evidence/tdx-quotes-20260911/, Quote v4, QE ECDSA-P256)
+   quote-europe-west4-a.bin     HIGH-S   original verifies: True   (r, n-s) verifies: True
+   quote-us-central1-a.bin      low-S    original verifies: True   (r, n-s) verifies: True
+   quote-us-central1-c.bin      low-S    original verifies: True   (r, n-s) verifies: True
+   quotes 3: high-S 1, originals verify 3, flipped verify 3   (attestation key taken from the quote itself;
+   its QE-report/PCK certification is the same for both forms and is not re-verified here)
+
+WHAT THIS MEANS
+   unaffected: nonces, binders, relay/replay defences, claims, keys -- the body is unchanged.
+   affected:   anything that identifies evidence by its bytes or its signature: hash-keyed replay
+               caches, statements over the hash of a payload, dedup, 'already registered'.
+   HATLS:      identity is REPORT_ID/CHIP_ID from the body; ledger entries are over links, not
+               report bytes; a forged copy is the same evidence to the mandate.
