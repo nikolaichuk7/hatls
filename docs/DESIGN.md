@@ -97,8 +97,12 @@ measurements push back:
   bytes). Not a database -- a register.
 
 So the weight is one HKDF at t2, one per re-attestation, and ~40 bytes of memory per connection.
-The mandate's cost (our measured continuity commit, 0.26-1.42 s) sits inside the key-release phase,
-dominated by appraisal (6.8-14.4 s), i.e. off the latency-critical path.
+Measured in this repository on the real reports it ships (`examples/cost.py`, reproducible from a
+clone): deriving a link is 2.5 µs (median, n=20000); the mandate's whole step on a mock chip is
+1.2 ms, most of it the mock's ECDSA; appraising a genuine SEV-SNP report is 1.6 ms warm; cold it is
+whatever AMD's KDS takes to serve the VCEK and chain that day (0.5 s and 7.4 s in two consecutive
+measurements) — a cost every SEV-SNP appraisal pays once per chip and TCB, and the only part of a
+step that is not microseconds.
 
 ## Is this new?
 

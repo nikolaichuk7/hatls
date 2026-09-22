@@ -59,8 +59,10 @@ open problem.
 - **Measured re-hosting detection.** Our failover-negatives drill already showed the 3.8.1 attack
   caught: two endpoints presenting one sealed identity -> the second declined. That is the
   mitigation 3.8.1 asks for, demonstrated on hardware, which no SEAT document has.
-- **Measured cost.** The continuity link is HKDF over ~80 bytes (microseconds); the mandate commit
-  sits inside appraisal, off the latency path (0.26-1.42 s vs 6.8-14.4 s). "Light" is measurable.
+- **Measured cost.** The continuity link is HKDF over ~80 bytes: 2.5 µs (`examples/cost.py`). What
+  costs is appraising the chip's report, 1.6 ms warm, and cold whatever AMD's KDS takes that day (0.5 s
+  and 7.4 s in two consecutive measurements) — a cost every SEV-SNP design pays and the chain does
+  not add to. "Light" is measurable.
 - **The malleability rule** that keeps the continuity identity sound (bind to body, not signature).
 
 ## Honest limits before we build
