@@ -1,0 +1,34 @@
+SEV-SNP: 87 genuine reports shipped in evidence/
+
+  GCP  reports  71   signing key {'VCEK': 71}
+       CHIP_ID   distinct  6   all-zero in 0 of 71   MASK_CHIP_KEY flag set in 0
+       REPORT_ID distinct 14   (one per guest instance)
+       REPORT_ID_MA all-ones in 71 of 71   (no migration agent: REPORT_ID cannot have travelled)
+       FAMILY_ID 1  IMAGE_ID 1  HOST_DATA 1  MEASUREMENT 2   (distinct values: what is RUNNING, not which machine)
+       chips that served more than one instance over time: 6  {'75bbd2bb8dfe': 2, 'dd92cae137e7': 2, '15f90cb08862': 3, '48d22d19657b': 2, '761022d0abef': 3, 'a775177c63f1': 2}
+  AWS  reports  16   signing key {'VLEK': 16}
+       CHIP_ID   distinct  1   all-zero in 16 of 16   MASK_CHIP_KEY flag set in 0
+       REPORT_ID distinct  8   (one per guest instance)
+       REPORT_ID_MA all-ones in 16 of 16   (no migration agent: REPORT_ID cannot have travelled)
+       FAMILY_ID 1  IMAGE_ID 1  HOST_DATA 1  MEASUREMENT 1   (distinct values: what is RUNNING, not which machine)
+
+  the ENDORSED SIGNING KEY, from certificates in evidence/:
+    VCEK (GCP): issued per CHIP_ID and TCB -- the key names the silicon; AMD's KDS serves it by CHIP_ID.
+    VLEK (AWS): CN=SEV-VLEK,  CSP_ID CN=cc-us-east-2.amazonaws.com   signed reports from 1 instance(s) here
+    VLEK (AWS): CN=SEV-VLEK,  CSP_ID CN=cc-eu-west-1.amazonaws.com   signed reports from 1 instance(s) here
+    -> no key is endorsed per INSTANCE on either cloud. VCEK = place (chip); VLEK = region (class).
+       REPORT_ID is the only per-instance claim, and it is a value INSIDE the signed body, not a key.
+
+TDX: 2 TDREPORTs from 2 guests launched from one image (tdx-claims-20260921T211425Z/probes.json)
+  fields identical between the two guests: 16
+  fields that differ: ['REPORTMACSTRUCT.teeinfohash', 'REPORTMACSTRUCT.mac', 'TDINFO.MROWNER']
+  -> MROWNER is the only TDINFO field that separates two live TDs, and the two hashes/MAC differ only
+     through it. MROWNER is supplied by the host VMM at TD initialisation (KVM_TDX_INIT_VM), so it
+     is the word of the party that would do the re-hosting. No hardware-issued instance claim exists.
+
+SUMMARY -- what the group's open questions look like on real silicon
+  endorsements-11 Sec.4 granularity   VCEK: per chip (place).  VLEK: per CSP region (class).  Per instance: none.
+  use-cases 4.3 machine identifier     SEV-SNP: REPORT_ID (firmware-generated, not a launch input, persists for the
+                                       guest's life) -- but CHIP_ID is all-zero on AWS, so 'the machine' has no silicon
+                                       identity there.  TDX: only MROWNER differs, and the host supplies it.
+  use-cases 3.8.1 instance continuity  possible on SEV-SNP via REPORT_ID; not possible from the TDREPORT alone.
