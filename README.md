@@ -126,7 +126,9 @@ act, so a stolen key cannot be turned into a weapon against its owner.
 Full design in [docs/DESIGN.md](docs/DESIGN.md); the layered threat model in
 [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md); why the working group needs this in
 [docs/GAP-ANALYSIS.md](docs/GAP-ANALYSIS.md); the hardware runs in
-[docs/HARDWARE-RESULTS.md](docs/HARDWARE-RESULTS.md).
+[docs/HARDWARE-RESULTS.md](docs/HARDWARE-RESULTS.md); and, goal by goal against the working
+group's own list in draft-ietf-seat-use-cases-01 Section 4 — including the three goals this does
+not address — [docs/SEAT-GOALS.md](docs/SEAT-GOALS.md).
 
 ## Repository layout
 
@@ -135,7 +137,7 @@ hatls/         the protocol + TEE backends (mock for local, SEV-SNP for hardware
 tools/         probes that run INSIDE a confidential guest
 examples/      operator-side: the demo, the attack playground, the hardware runner
 scripts/       launch a real SEV-SNP guest
-docs/          design, threat model, gap analysis, hardware results
+docs/          design, threat model, gap analysis, hardware results, the SEAT goals statement
 evidence/      real attestation verdicts from the hardware runs
 ```
 
@@ -253,19 +255,25 @@ mandate accepts. This is an open item, stated rather than hidden.
 - Sealing the identity key to its chip is part of the design but is **not implemented here**; the
   launcher deliberately ships one key to two guests, which is the stolen-key model this repository
   demonstrates against.
-- **The binder and the mandate's appraisal of one step are machine-proved. The rest is not.**
-  Out of the model: the transfer grant, revocation, the ledger, receipts, the hardware-witnessed
-  head, cross-mandate detection, and TLS. ProVerif 2.05 proves, against
-  a Dolev-Yao attacker with the identity key handed to it in the clear and unboundedly many
-  parallel sessions, that anything the mandate accepts was attested by that instance for the
-  exporter the mandate derived itself, by the instance it enrolled, and under the session it was
-  produced for — and that the honest run is still reachable, so none of it holds vacuously. The
-  same model with the v0.1 defect put back is included, and ProVerif finds the relay in it: that
-  is the check that the model is sensitive to the property rather than agreeable about everything.
-  See [formal/](formal/). **Not** covered: TLS itself, the transfer grant, revocation, the ledger
-  and its receipts, and the hardware-witnessed head.
-- The early binder runs over a session context both endpoints derive independently, not over the
-  true TLS handshake transcript, which needs a hook into the TLS stack.
+- **The binder, the mandate's appraisal of one step, and the ORDER of a three-link chain are
+  machine-proved. The rest is not.** Out of the model: the transfer grant, revocation, the ledger,
+  receipts, the hardware-witnessed head, cross-mandate detection, and TLS. ProVerif 2.05 proves,
+  against a Dolev-Yao attacker with the identity key handed to it in the clear, a thief's TEE that
+  signs anything, the thief as TLS peer of sessions with both ends, and unboundedly many parallel
+  sessions, that anything the mandate accepts at position *n* was attested by the enrolled
+  instance, for the exporter the mandate derived itself, under the session it was produced for,
+  **at position *n* and before acceptance** — non-injectively and injectively — and that the
+  honest run is still reachable, so none of it holds vacuously. Two broken models are included as
+  checks that the prover is sensitive rather than agreeable: with the v0.1 defect put back it finds
+  the relay; with the binder held constant for the connection it finds the resend of position 0's
+  Evidence at position 1, which is draft-fossati-seat-early-attestation-07 Section 8.4 stated in
+  prose. See [formal/](formal/).
+- HATLS's own first link runs over a session context both endpoints derive independently, not over
+  the true TLS handshake transcript. The hook that would allow the transcript now exists —
+  `hatls/transcript.py` records ClientHello and ServerHello over memory BIOs and computes
+  draft-fossati-seat-early-attestation's Section 5.1.1 binder from them, byte-checked against RFC
+  8448, and the reattestation experiment runs on it — but moving HATLS's first link onto it is a
+  protocol change not yet made.
 
 ## Relationship to IETF
 
