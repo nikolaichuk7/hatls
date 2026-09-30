@@ -1,0 +1,12 @@
+OpenSSL 3.0.13 30 Jan 2024; suite TLS_AES_256_GCM_SHA384
+
+does the Finished the stack sent verify over a transcript rebuilt under each reading? (one run)
+                                                               server Finished   client Finished
+  (a) retry ignored:       CH1 || SH                           fails             fails
+  (b) messages as sent:    CH1 || HRR || CH2 || SH             fails             fails
+  (c) message_hash:        msg_hash(CH1) || HRR || CH2 || SH   verifies          verifies
+  (d) 'the' CH is CH2:     CH2 || SH                           fails             fails
+
+  over 200 HelloRetryRequest handshakes: both Finished verify under (c) and under no other reading in 200 of 200 runs
+
+  control, both ends X25519, no retry: readings ['CH || SH']; both Finished verify: True   (must be True)
